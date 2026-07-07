@@ -7,3 +7,7 @@
 
 ## Estructura
 - src/ codigo, tests/ pruebas, migrations/ cambios de BD, docs/ decisiones.
+
+## Pull Requests
+- Todo merge a main pasa por Pull Request en GitHub.
+- El PR muestra el diff completo: se lee ANTES de aprobar.
