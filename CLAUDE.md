@@ -11,3 +11,6 @@
 ## Pull Requests
 - Todo merge a main pasa por Pull Request en GitHub.
 - El PR muestra el diff completo: se lee ANTES de aprobar.
+
+## Versiones
+- Los tags de version siguen semver (vMAYOR.MENOR.PARCHE).
