@@ -127,6 +127,15 @@ El enforcement de que "solo la cuenta maquina de un rol puede aprobar/comentar c
 
 Con esos cuatro mecanismos activos, la firma textual (`**Rol**: qa`) queda como convencion para lectura humana; la garantia real de identidad la da GitHub, no un script. Quien mergea confirma visualmente que cada comentario firmado necesario aparece con `author` = cuenta maquina esperada — no necesita ejecutar nada.
 
+## Higiene de credenciales (issue #17)
+
+- **2FA obligatorio** en todas las cuentas maquina y en la cuenta del operador. Sin excepcion.
+- **Expiracion de PATs**: maxima 90 dias; la practica vigente es 30. Nunca tokens sin expiracion.
+- **Rotacion**: al vencer, se regenera y se reemplaza el archivo en `/etc/fabrica/tokens/` (metodo a prueba de pegado en el runbook). Rotacion no programada INMEDIATA ante cualquier sospecha de filtracion — un PAT filtrado con Pull requests write puede aprobar merges falsos durante su ventana de vida.
+- **Un token jamas viaja por un chat, un log, un commit o una URL.** Si paso, se considera filtrado: rotar ya.
+- **Auditoria semestral** de scopes: cada PAT tiene exactamente lo que la seccion "Permisos minimos" declara; mas que eso es hallazgo bloqueante de `seguridad`.
+- **Bypass list**: ninguna cuenta maquina figura en la Bypass list de branch protection (ya declarado en "Enforcement de identidad", mecanismo 4 — aca queda como regla de higiene explicita).
+
 ## Checklist de activacion (el circuito NO esta operativo hasta completarlo)
 
 El operador/administrador verifica cada item y recien entonces el circuito ofrece sus garantias. Mientras falte alguno, todo merge es honor system y debe tratarse como tal:

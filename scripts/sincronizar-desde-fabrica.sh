@@ -110,7 +110,13 @@ else
 fi
 
 echo "==> extrayendo"
-tar -xzf "$TMPDIR/fabrica.tar.gz" -C "$TMPDIR"
+# Issue #16: pre-validar el tarball — rechazar rutas absolutas o traversal
+# antes de extraer (GNU tar rechaza ../ por default, pero explicito > implicito).
+if tar -tzf "$TMPDIR/fabrica.tar.gz" | grep -Eq '(^/|\.\./)'; then
+  echo "sincronizar: el tarball contiene rutas absolutas o traversal; rechazo." >&2
+  exit 6
+fi
+tar --no-same-owner --no-same-permissions -xzf "$TMPDIR/fabrica.tar.gz" -C "$TMPDIR"
 SRC="$(find "$TMPDIR" -maxdepth 1 -type d -name '*fabrica-*' | head -n1)"
 if [[ -z "$SRC" || ! -d "$SRC" ]]; then
   echo "sincronizar: no encontre el directorio extraido en $TMPDIR" >&2
@@ -180,6 +186,11 @@ copiar_archivo() {
     return 1
   fi
   echo "  copiado: $rel"
+  # Issue #16: si el repo producto ignora este path, el commit no lo captura
+  # y queda drift silencioso — avisar, no fallar (decision del operador).
+  if git check-ignore -q "$rel" 2>/dev/null; then
+    echo "  AVISO: $rel esta en .gitignore del repo — el sync lo copio pero el commit NO lo va a incluir." >&2
+  fi
 }
 
 echo "==> vendoring (allowlist de ${#ALLOWLIST[@]} archivos, sin borrado)"
