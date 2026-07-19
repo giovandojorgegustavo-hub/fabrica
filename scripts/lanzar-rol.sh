@@ -25,14 +25,16 @@ fi
 ROL="$1"
 PROMPT_ARG="$2"
 
-# Allowlist estricta: los unicos roles validos son los 7 que declara la Fabrica.
-# Sin este check, ROL="../../etc/passwd" construye paths fuera del contrato
-# (ver docs/identidades.md).
+# Allowlist estricta: solo los roles REVISORES tienen identidad propia con
+# token (ver docs/identidades.md). Los roles implementadores (backend,
+# frontend, ux) trabajan con la identidad del operador y no pasan por aca.
+# Sin este check, ROL="../../etc/passwd" construye paths fuera del contrato.
 case "$ROL" in
-  qa|seguridad|arquitecto|producto|backend|frontend|ux) ;;
+  qa|seguridad|arquitecto|producto) ;;
   *)
     echo "lanzar-rol: rol invalido: '$ROL'" >&2
-    echo "lanzar-rol: validos: qa, seguridad, arquitecto, producto, backend, frontend, ux" >&2
+    echo "lanzar-rol: validos (revisores con token): qa, seguridad, arquitecto, producto" >&2
+    echo "lanzar-rol: los roles implementadores (backend, frontend, ux) no usan este lanzador." >&2
     exit 2
     ;;
 esac
@@ -45,11 +47,6 @@ if [[ ! -f "$ROL_FILE" ]]; then
 fi
 
 TOKEN_FILE="/etc/fabrica/tokens/${ROL}.token"
-if [[ ! -r "$TOKEN_FILE" ]]; then
-  echo "lanzar-rol: no puedo leer $TOKEN_FILE (no existe o no tengo permisos)" >&2
-  echo "lanzar-rol: ver docs/identidades.md para el layout esperado de tokens." >&2
-  exit 4
-fi
 
 if [[ -f "$PROMPT_ARG" ]]; then
   PROMPT_TEXT="$(cat "$PROMPT_ARG")"
@@ -61,8 +58,15 @@ ROL_TEXT="$(cat "$ROL_FILE")"
 
 # Inyecta el token del rol via env var. No lo escribimos a disco. La sesion
 # claude lo hereda; gh y otras herramientas lo usan como identidad.
+# Lectura UNICA (sin test -r previo: evita TOCTOU) + validacion de contenido.
+# El layout esperado es root:fabrica-tokens 640 con el operador en el grupo
+# fabrica-tokens (ver docs/identidades.md).
+if ! GITHUB_TOKEN="$(cat "$TOKEN_FILE" 2>/dev/null)" || [[ -z "$GITHUB_TOKEN" ]]; then
+  echo "lanzar-rol: no puedo leer $TOKEN_FILE (no existe, esta vacio, o no tengo permisos)" >&2
+  echo "lanzar-rol: el operador debe pertenecer al grupo fabrica-tokens; ver docs/identidades.md." >&2
+  exit 4
+fi
 export GITHUB_TOKEN
-GITHUB_TOKEN="$(cat "$TOKEN_FILE")"
 
 FULL_PROMPT="$(printf '%s\n\n---\n\nPedido del usuario:\n\n%s\n' "$ROL_TEXT" "$PROMPT_TEXT")"
 

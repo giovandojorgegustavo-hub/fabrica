@@ -17,7 +17,8 @@
 #   4. Deja el checkout con cambios sin commitear, listos para armar el PR.
 #
 # Que NUNCA hace:
-#   - rm -rf, ni ningun borrado recursivo.
+#   - Borrado recursivo sobre el working tree del repo producto (el unico
+#     rm -rf es la limpieza del directorio temporal de mktemp al salir).
 #   - Copiar directorios completos (siempre archivo por archivo).
 #   - Tocar docs/adr/ (los ADRs son del repo producto).
 #   - Tocar .claude/contexto-producto.md (el contexto de usuario es del repo producto).
@@ -111,9 +112,13 @@ copiar_archivo() {
     echo "sincronizar: $rel es symlink en el tarball; rechazo por seguridad." >&2
     return 1
   fi
+  # Archivo de la allowlist ausente en el commit = fallo duro. Si fabrica
+  # retira un archivo, lo retira de la allowlist en el mismo commit; un skip
+  # silencioso dejaria el vendored viejo con FABRICA_VERSION nuevo (drift).
   if [[ ! -f "$src" ]]; then
-    echo "sincronizar: $rel no existe como archivo regular en el commit $SHA, salto." >&2
-    return 0
+    echo "sincronizar: $rel no existe como archivo regular en el commit $SHA." >&2
+    echo "sincronizar: allowlist y commit desalineados; no continuo." >&2
+    return 1
   fi
 
   # Rechazo mkdir sobre paths con '..' (defensa aunque el allowlist ya lo evita).
@@ -125,8 +130,14 @@ copiar_archivo() {
   esac
 
   mkdir -p "$(dirname "$dst")"
-  # cp -f sobreescribe el archivo destino sin borrar nada mas. Nunca rm -rf.
-  cp -f "$src" "$dst"
+  # Copia via temporal + mv (rename atomico). NUNCA cp -f directo al destino:
+  # este script esta en su propia allowlist, y cp -f truncaria el mismo inode
+  # que bash esta leyendo mientras corre (ejecucion corrupta no determinista).
+  # mv reemplaza la entrada de directorio y preserva el inode viejo abierto.
+  local tmp
+  tmp="$(mktemp "$(dirname "$dst")/.sync-XXXXXX")"
+  cp -f "$src" "$tmp"
+  mv -f "$tmp" "$dst"
   echo "  copiado: $rel"
 }
 

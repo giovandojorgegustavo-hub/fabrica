@@ -30,8 +30,8 @@
 - **Cambio estructural** (esquema, contratos entre modulos, dependencias nuevas, acoplamiento): exige revision de `arquitecto`.
 - Hallazgos criticos o altos bloquean el merge hasta ser resueltos.
 - Hallazgos medios y bajos se registran como issues en GitHub y no bloquean.
-- El enforcement de identidad de los revisores es nativo de GitHub: branch protection + CODEOWNERS + "Require approval from someone other than the last pusher" + PATs con `pull_request:write` solo en las cuentas maquina `fabrica-<rol>`. El implementador no puede aprobar su propio PR ni simular ser otra cuenta. Detalle en `docs/identidades.md`.
-- Antes de mergear, quien mergea confirma visualmente en el PR que cada revision necesaria dejo comentario firmado desde su cuenta maquina esperada (por ejemplo, revision de `qa` debe venir de `author = fabrica-qa`). No hay script local que reemplace esto: el gate real es el de GitHub. Si un comentario firmado viene de otra cuenta, NO se mergea.
+- El enforcement de identidad de los revisores es nativo de GitHub: branch protection (con required approving reviews: 2) + CODEOWNERS + "Require approval from someone other than the last pusher" + PATs con Pull requests write solo en las cuentas maquina de rol. El implementador no puede aprobar su propio PR ni simular ser otra cuenta. La tabla de cuentas por rol (unica fuente de verdad de nombres) y el checklist de activacion viven en `docs/identidades.md` — el enforcement rige recien cuando ese checklist esta completo.
+- Antes de mergear, quien mergea confirma visualmente en el PR que cada revision necesaria dejo comentario firmado desde su cuenta maquina esperada segun la tabla de `docs/identidades.md` (por ejemplo, revision de `qa` debe venir de `author = qa-fabrica-gg`). No hay script local que reemplace esto: el gate real es el de GitHub. Si un comentario firmado viene de otra cuenta, NO se mergea.
 - Si los checks estan verdes, todas las revisiones necesarias tienen comentario firmado desde su cuenta maquina, y no hay hallazgos bloqueantes: el merge lo hace un rol distinto del implementador.
 
 ## Definition of Done

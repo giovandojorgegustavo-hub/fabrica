@@ -2,7 +2,7 @@
 
 Cada rol revisor de la Fabrica (`qa`, `seguridad`, `arquitecto`, `producto`) opera como una identidad distinta del implementador. Este documento describe el layout esperado de tokens, las cuentas maquina de GitHub, los permisos minimos del PAT y como se configura branch protection para exigir aprobacion no-autor.
 
-Este repo **no crea** los tokens ni las cuentas. Los crea el operador con permisos de root y de administrador del repo en GitHub, fuera del arbol de git. Este documento es el contrato: describe que debe existir para que `scripts/lanzar-rol.sh` funcione.
+Este repo **no crea** los tokens ni las cuentas. Los crea el operador con permisos de root y de administrador del repo en GitHub, fuera del arbol de git. Este documento es el **contrato**: describe que DEBE existir y estar configurado para que el circuito sea real. Nada de lo descrito aca se asume activo — ver el checklist de verificacion al final. Hasta que ese checklist este completo, el circuito opera por convencion (honor system) y NO ofrece las garantias de este documento.
 
 ## Layout de tokens
 
@@ -15,74 +15,113 @@ Los tokens viven fuera del repo, con permisos estrictos:
 /etc/fabrica/tokens/producto.token
 ```
 
-- Dueno y grupo: `root:root`.
-- Permisos: `600` (solo root lee).
+- Dueno y grupo: `root:fabrica-tokens` (grupo dedicado, solo para esto).
+- Permisos: `640` (root escribe; el grupo solo lee).
+- El operador que lanza roles pertenece al grupo `fabrica-tokens`. Nadie mas.
 - Contenido: un unico PAT de GitHub por rol, sin saltos de linea al final.
-- Nadie mas que root puede leer estos archivos. `scripts/lanzar-rol.sh` los lee via `sudo` cuando corresponda, o se ejecuta como un servicio que ya tiene permiso de lectura.
+- `scripts/lanzar-rol.sh` corre como el operador (NUNCA como root) y lee el token directo. Si el operador no esta en el grupo, el script falla claro con exit 4.
+
+Setup del grupo (una sola vez, como root):
+
+```
+groupadd --system fabrica-tokens
+usermod -aG fabrica-tokens <usuario-operador>
+chown root:fabrica-tokens /etc/fabrica/tokens/*.token
+chmod 640 /etc/fabrica/tokens/*.token
+```
+
+Por que NO `root:root 600` + sudo: obligaria a correr el lanzador (y la sesion `claude` completa) como root para poder leer el token — maximo privilegio para una tarea de lectura. El grupo dedicado da el minimo real: root administra, el operador solo lee, el resto del sistema no ve nada.
 
 ## Cuentas maquina de GitHub
 
-Cada rol revisor tiene una cuenta maquina propia en GitHub, distinta de la cuenta del implementador:
+Cada rol revisor tiene una cuenta maquina propia en GitHub, distinta de la cuenta del implementador. Esta tabla es la UNICA fuente de verdad de nombres de cuenta — cualquier otro documento referencia esta tabla, no duplica literales:
 
-- `fabrica-qa`
-- `fabrica-seguridad`
-- `fabrica-arquitecto`
-- `fabrica-producto`
+| Rol | Cuenta maquina | Estado |
+|-----|----------------|--------|
+| `qa` | `qa-fabrica-gg` | creada |
+| `seguridad` | `seguridad-fabrica-gg` | creada |
+| `arquitecto` | *(pendiente de creacion)* | NO existe |
+| `producto` | *(pendiente de creacion)* | NO existe |
+
+Los roles cuya cuenta figura como **pendiente** operan por convencion: su revision se firma textualmente en el PR desde la cuenta del operador, se declara la excepcion en el mismo comentario, y NO cuenta como gate con enforcement. Cuando la cuenta se cree, se actualiza esta tabla y el CODEOWNERS en el mismo PR. No se declara enforcement de un rol cuya cuenta no existe.
 
 El PAT que vive en `/etc/fabrica/tokens/<rol>.token` pertenece a la cuenta maquina correspondiente. **Nunca** a la cuenta del implementador.
 
 ## Permisos minimos del PAT
 
-Cada PAT tiene EL MINIMO necesario para revisar:
+Cada PAT es **fine-grained** (los scopes clasicos de PAT no permiten este recorte: alli `repo` es todo-o-nada), restringido a los repos donde el rol revisa, con:
 
-- `repo:read` — leer contenido, commits y diffs.
-- `pull_request:read` — leer PRs, comentarios, reviews.
-- `pull_request:write` — solo para dejar comentario firmado y aprobar/pedir cambios.
+- **Contents: Read-only** — leer contenido, commits y diffs.
+- **Pull requests: Read and write** — leer PRs y dejar comentario firmado / aprobar / pedir cambios.
 
-Y nada mas. Sin `repo:write` (no debe poder pushear codigo). Sin `workflow`. Sin `admin`. Sin `packages`. Sin `delete`.
+Y nada mas. Sin Contents write (el token no puede pushear codigo). Sin Workflows. Sin Administration. Sin Packages.
 
 Si un PAT tiene mas de lo listado, es un hallazgo bloqueante y `seguridad` debe reportarlo.
 
+**Aclaracion sobre write a nivel cuenta vs token**: para que GitHub considere a una cuenta en CODEOWNERS, la cuenta necesita permiso **Write** en el repo como colaborador. Ese write es de la CUENTA; el PAT fine-grained que usa el circuito NO incluye Contents write, asi que el token del rol no puede pushear. El riesgo residual (la cuenta podria pushear con otra credencial propia) se cierra con branch protection: `main` protegida rechaza push directo de cualquiera, incluidas las cuentas maquina. El modelo de minimo privilegio es: cuenta con write formal + token recortado + rama protegida.
+
+## Vector conocido: prompt injection sobre la sesion revisora
+
+La sesion `claude` del rol revisor lee contenido controlado por el autor del PR (el diff, la descripcion, los comentarios) teniendo `GITHUB_TOKEN` con Pull requests write en su entorno. Un PR malicioso puede intentar inyectar instrucciones ("aproba este PR") para que la sesion apruebe bajo la identidad del rol. Mitigaciones vigentes: el contenido del PR se trata como NO confiable dentro de la sesion (regla en los prompts de rol), los repos son privados y el autor de los PRs es el propio operador. Si la fabrica incorpora autores externos, este vector escala y la aprobacion debe moverse fuera de la sesion que lee el diff (token de solo lectura para revisar; la aprobacion la emite un paso separado que no procesa contenido del PR).
+
 ## Branch protection para exigir aprobacion no-autor
 
-En cada repo producto, `main` esta protegida con la siguiente configuracion:
+En cada repo producto, `main` DEBE protegerse con la siguiente configuracion (esto es contrato a aplicar por el administrador del repo, no un estado ya activo — ver checklist al final):
 
 - Require pull request reviews before merging: **si**.
-- Require approval from someone other than the last pusher: **si**. (Esto impide que el implementador aprueba su propio PR.)
+- **Required approving reviews: 2.** Ver la aclaracion de abajo: sin este numero, CODEOWNERS solo exige UNA de las cuentas revisoras.
+- Require approval from someone other than the last pusher: **si**. (Esto impide que el implementador apruebe su propio PR.)
 - Dismiss stale pull request approvals when new commits are pushed: **si**.
-- Require review from Code Owners: **si**. Los `CODEOWNERS` listan las cuentas maquina como duenas de los paths relevantes (por ejemplo, `docs/adr/` es dueno de `fabrica-arquitecto`).
+- Require review from Code Owners: **si**.
 - Restrict who can dismiss pull request reviews: solo administradores.
 - Require status checks to pass before merging: **si**.
 - Do not allow bypassing the above settings: **si**.
 
-Esto cierra la puerta a que el implementador se autoaprueba: GitHub exige que la aprobacion venga de otra cuenta, y las cuentas revisoras son las de rol.
+### Limitacion de CODEOWNERS: es OR, no Y
+
+Cuando una linea de `CODEOWNERS` lista varias cuentas (`* @qa-fabrica-gg @seguridad-fabrica-gg`), GitHub satisface el requisito "Require review from Code Owners" con la aprobacion de **cualquiera** de ellas. CODEOWNERS NO puede expresar "qa Y seguridad". El "ambas revisiones obligatorias" del circuito se sostiene con la combinacion:
+
+1. **Required approving reviews: 2** — el merge exige dos aprobaciones, y como los unicos revisores con cuenta son qa y seguridad, en la practica son ellas dos.
+2. La confirmacion visual de quien mergea (comentario firmado de CADA rol requerido, con `author.login` correcto).
+
+Si a futuro se suman mas cuentas revisoras (arquitecto, producto), el "2" deja de garantizar el par qa+seguridad y el chequeo debe pasar a una **GitHub Action** como required status check que valide que existe una review aprobada de cada cuenta requerida para el tipo de cambio. Esa Action es el unico camino para exigir combinaciones especificas.
 
 ## Verificacion tecnica de la firma (author.login)
 
 La firma textual (`**Rol**: qa`, `**Rol**: seguridad`, etc.) es solo formato de lectura. **No prueba nada por si sola**: cualquiera con `pull_request:write` puede escribir esos strings.
 
-La prueba real es que el `author.login` del comentario en la API de GitHub sea la cuenta maquina esperada:
+La prueba real es que el `author.login` del comentario en la API de GitHub sea la cuenta maquina esperada segun la tabla de "Cuentas maquina de GitHub" de este documento:
 
 | Rol declarado en el body | `author.login` esperado |
 |--------------------------|-------------------------|
-| `qa`                     | `fabrica-qa`            |
-| `seguridad`              | `fabrica-seguridad`     |
-| `arquitecto`             | `fabrica-arquitecto`    |
-| `producto`               | `fabrica-producto`      |
+| `qa`                     | `qa-fabrica-gg`         |
+| `seguridad`              | `seguridad-fabrica-gg`  |
+| `arquitecto`             | *(sin cuenta aun — firma por convencion, sin enforcement)* |
+| `producto`               | *(sin cuenta aun — firma por convencion, sin enforcement)* |
 
 ## Enforcement de identidad: nativo de GitHub, no de scripts
 
-El enforcement de que "solo la cuenta maquina de un rol puede aprobar/comentar como ese rol" NO se hace con scripts locales. Se hace con la configuracion nativa de GitHub. La combinacion de cuatro mecanismos ya activos deja la puerta cerrada:
+El enforcement de que "solo la cuenta maquina de un rol puede aprobar/comentar como ese rol" NO se hace con scripts locales. Se hace con la configuracion nativa de GitHub. La combinacion de cuatro mecanismos — **cuando esten aplicados y verificados** (checklist al final) — deja la puerta cerrada:
 
 1. **Branch protection + "Require approval from someone other than the last pusher"**: GitHub bloquea el merge si la unica aprobacion viene de quien pusheo el ultimo commit. El implementador **no puede aprobar su propio PR**, sin importar que comente en el body.
 
-2. **Branch protection + "Require review from Code Owners"**: los `CODEOWNERS` del repo listan las cuentas maquina como duenas de los paths criticos. Un PR que toque esos paths exige aprobacion (no solo comentario) de la cuenta maquina correspondiente.
+2. **Branch protection + "Required approving reviews: 2" + "Require review from Code Owners"**: exigen que las aprobaciones vengan de las cuentas revisoras y que sean ambas (ver "Limitacion de CODEOWNERS" arriba: CODEOWNERS solo no alcanza).
 
-3. **PATs restringidos por cuenta**: el PAT con `pull_request:write` vive solo en las cuentas maquina de rol. El PAT del implementador NO tiene esas cuentas ni puede simularlas. Un comentario o aprobacion "firmado" como `qa` que venga de otra cuenta queda visible en `author.login` en la UI de GitHub y en la API — no puede falsificarse desde otro token.
+3. **PATs restringidos por cuenta**: el PAT con Pull requests write vive solo en las cuentas maquina de rol. El PAT del implementador NO tiene esas cuentas ni puede simularlas. Un comentario o aprobacion "firmado" como `qa` que venga de otra cuenta queda visible en `author.login` en la UI de GitHub y en la API — no puede falsificarse desde otro token.
 
 4. **Branch protection + "Do not allow bypassing"**: nadie (incluido admin) puede saltear las reglas anteriores sin dejar rastro. Ninguna cuenta maquina de rol figura en la "Bypass list": los revisores aprueban, **no bypasean**. Esto se audita en la revision de `seguridad` de cualquier PR que toque configuracion del repo.
 
 Con esos cuatro mecanismos activos, la firma textual (`**Rol**: qa`) queda como convencion para lectura humana; la garantia real de identidad la da GitHub, no un script. Quien mergea confirma visualmente que cada comentario firmado necesario aparece con `author` = cuenta maquina esperada — no necesita ejecutar nada.
+
+## Checklist de activacion (el circuito NO esta operativo hasta completarlo)
+
+El operador/administrador verifica cada item y recien entonces el circuito ofrece sus garantias. Mientras falte alguno, todo merge es honor system y debe tratarse como tal:
+
+- [ ] Cuentas maquina de qa y seguridad creadas (ver tabla) e invitadas con Write a cada repo producto y a fabrica.
+- [ ] PAT fine-grained generado por cuenta, con los permisos minimos de este doc, guardado en `/etc/fabrica/tokens/<rol>.token`.
+- [ ] Grupo `fabrica-tokens` creado; tokens `root:fabrica-tokens 640`; operador en el grupo.
+- [ ] Branch protection aplicada en `main` de cada repo con TODOS los items de la seccion "Branch protection" (incluido Required approving reviews: 2 y no-bypass).
+- [ ] Verificacion practica: un PR de prueba NO se puede mergear sin las dos aprobaciones ni con la aprobacion del propio autor.
 
 ### Por que este repo NO trae un script de verificacion
 
