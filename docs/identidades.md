@@ -143,7 +143,7 @@ El operador/administrador verifica cada item y recien entonces el circuito ofrec
 - [ ] Cuentas maquina de qa y seguridad creadas (ver tabla) e invitadas con Write a cada repo producto y a fabrica.
 - [ ] PAT generado por cuenta segun "Permisos minimos del PAT" (hoy: clasico con scope `repo` unicamente, por la excepcion vigente), guardado en `/etc/fabrica/tokens/<rol>.token`.
 - [ ] Grupo `fabrica-tokens` creado; directorio `/etc/fabrica/tokens` con `root:fabrica-tokens 750`; tokens `root:fabrica-tokens 640`; operador en el grupo.
-- [ ] Branch protection aplicada en `main` de cada repo con TODOS los items de la seccion "Branch protection" (incluido Required approving reviews: 2 y no-bypass).
+- [ ] Branch protection aplicada en `main` de cada repo con TODOS los items de la seccion "Branch protection" (incluido Required approving reviews: 2 y no-bypass). OJO (issue #34): la verificacion via API (`gh api .../branches/main/protection`) requiere permisos de ADMIN — una cuenta de rol (Write) recibe 404 AUNQUE la proteccion este activa. Ese 404 NO es evidencia de proteccion ausente: este checklist lo verifica el operador con su cuenta admin.
 - [ ] Verificacion practica: un PR de prueba NO se puede mergear sin las dos aprobaciones ni con la aprobacion del propio autor.
 
 ### Por que este repo NO trae un script de verificacion
