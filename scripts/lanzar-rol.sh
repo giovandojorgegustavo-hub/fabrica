@@ -96,6 +96,16 @@ if ! GITHUB_TOKEN="$(cat "$TOKEN_FILE" 2>/dev/null)" || [[ -z "$GITHUB_TOKEN" ]]
   echo "lanzar-rol: el operador debe pertenecer al grupo fabrica-tokens; ver docs/identidades.md." >&2
   exit 4
 fi
+# Issue #14: el token debe ser un ARCHIVO REGULAR, no symlink ni FIFO ni
+# device — un symlink fuera del layout (error del operador) o una FIFO
+# adversarial inyectarian contenido arbitrario como token.
+if [[ -L "$TOKEN_FILE" || ! -f "$TOKEN_FILE" ]]; then
+  echo "lanzar-rol: $TOKEN_FILE debe ser un archivo regular (no symlink/FIFO/device)." >&2
+  exit 4
+fi
+# ADVERTENCIA (issue #14): NUNCA activar set -x alrededor de la lectura del
+# token — el PAT se imprimiria en stderr. El path del archivo puede loguearse;
+# el VALOR jamas.
 # Issue #23: validar forma del PAT aca — un archivo con basura fallaria
 # recien dentro de la sesion, lejos de la causa.
 if [[ ! "$GITHUB_TOKEN" =~ ^(ghp_|github_pat_) ]]; then
