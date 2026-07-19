@@ -110,8 +110,12 @@ Pasos:
    gh pr review ${pr_num} --repo ${slug} --request-changes (con criticos/altos)
    El body es tu comentario firmado: **Rol**: ${rol} - commit revisado ${head_sha} - timestamp UTC - hallazgos con severidad y escenario - veredicto. Los hallazgos medios/bajos se listan para que el operador los registre como issues."
 
+      # < /dev/null es OBLIGATORIO: sin eso la sesion hereda el stdin del
+      # while-read y se COME las lineas restantes de gh pr list (los otros
+      # PRs desaparecen de la pasada en silencio). Encontrado en la segunda
+      # corrida real del vigilante.
       if timeout "$TIMEOUT_SESION" "$repo_path/scripts/lanzar-rol.sh" "$rol" "$prompt" \
-           --allowedTools "Bash(gh:*)" >> "$LOG_FILE" 2>&1; then
+           --allowedTools "Bash(gh:*)" < /dev/null >> "$LOG_FILE" 2>&1; then
         lanzados=$((lanzados + 1))
         echo "vigilante: sesion $rol para $slug#$pr_num termino."
       else
