@@ -9,6 +9,17 @@
 #   HEALTH_URL=<url del smoke test>       # ej: http://10.14.0.1:8000/salud
 #   MIGRATIONS_CMD=<comando o vacio>      # ej: python3 scripts/migrar.py
 #   BRANCH=<rama viva>                    # default: main
+#   HEALTH_DEADLINE=<segundos>            # default: 60 (polling del smoke test)
+#
+# Contrato de deploy.env (issue #22): dueno = el operador (o root), permisos
+# SIN escritura para otros (600/640/644 estan bien; 662/666 NO). Este script
+# lo verifica antes de source-arlo: un deploy.env escribible por cualquiera
+# es ejecucion de codigo con los privilegios (y el sudo) del operador.
+# MIGRATIONS_CMD se ejecuta SIN shell (sin pipes ni redirecciones): si la
+# migracion necesita shell, envolvela en un script versionado del repo.
+#
+# sudo minimo requerido: ver "Sudoers minimo" en docs/salud-endpoint.md
+# (NOPASSWD solo para systemctl restart de la unit declarada, nada mas).
 #
 # Contrato del endpoint de salud (obligatorio para el DoD):
 #   HTTP 200 + JSON con al menos { "status": "ok", "commit": "<sha completo>" }.
@@ -31,10 +42,27 @@ if ! command -v jq >/dev/null 2>&1; then
   exit 2
 fi
 
-CONFIG="${DEPLOY_CONFIG:-scripts/deploy.env}"
+# Path FIJO (issue #22, coherente con ADR 001): sin override por variable de
+# entorno — un env var apuntando a un archivo arbitrario que se source-a es
+# ejecucion de codigo sin rastro.
+CONFIG="scripts/deploy.env"
 if [[ ! -f "$CONFIG" ]]; then
   echo "deploy: falta $CONFIG (configuracion del repo)." >&2
   echo "deploy: crear con SERVICE_NAME, HEALTH_URL, MIGRATIONS_CMD (opcional), BRANCH (opcional)." >&2
+  exit 2
+fi
+
+# Contrato de permisos (issue #22): rechazar deploy.env ajeno o escribible
+# por otros ANTES de ejecutarlo via source.
+CONFIG_OWNER="$(stat -c '%U' "$CONFIG")"
+CONFIG_PERMS="$(stat -c '%a' "$CONFIG")"
+if [[ "$CONFIG_OWNER" != "$(id -un)" && "$CONFIG_OWNER" != "root" ]]; then
+  echo "deploy: $CONFIG pertenece a '$CONFIG_OWNER' (esperado: $(id -un) o root). No lo ejecuto." >&2
+  exit 2
+fi
+if [[ "${CONFIG_PERMS: -1}" == [2367] ]]; then
+  echo "deploy: $CONFIG es escribible por otros (permisos $CONFIG_PERMS). No lo ejecuto." >&2
+  echo "deploy: chmod 640 $CONFIG y reintentar." >&2
   exit 2
 fi
 # shellcheck disable=SC1090
@@ -54,7 +82,10 @@ echo "==> commit objetivo: $TARGET_COMMIT"
 
 if [[ -n "$MIGRATIONS_CMD" ]]; then
   echo "==> [2/5] migraciones: $MIGRATIONS_CMD"
-  eval "$MIGRATIONS_CMD"
+  # Issue #22: SIN eval. Word-splitting simple y ejecucion directa — sin
+  # pipes, redirecciones ni sustituciones. Shell necesario => script versionado.
+  read -r -a MIG_ARR <<< "$MIGRATIONS_CMD"
+  "${MIG_ARR[@]}"
 else
   echo "==> [2/5] migraciones: nada declarado, salto"
 fi
@@ -76,16 +107,25 @@ if [[ "$BEFORE_TS" == "$AFTER_TS" ]]; then
 fi
 echo "deploy: $SERVICE_NAME reinicio: $BEFORE_TS -> $AFTER_TS"
 
-echo "==> [4/5] smoke test contra $HEALTH_URL"
-HEALTH_BODY="$(curl --fail --silent --show-error --max-time 10 "$HEALTH_URL")" || {
-  echo "deploy: smoke test FALLO en $HEALTH_URL (HTTP no-2xx o timeout)" >&2
-  exit 6
-}
-HEALTH_STATUS="$(printf '%s' "$HEALTH_BODY" | jq -r '.status // empty')"
+HEALTH_DEADLINE="${HEALTH_DEADLINE:-60}"
+echo "==> [4/5] smoke test contra $HEALTH_URL (deadline ${HEALTH_DEADLINE}s)"
+# Polling con deadline (hallazgo M2 de la revision del PR #12): un solo curl
+# 2s despues del restart fallaba espurio con servicios que tardan en estar
+# listos (migraciones al boot, warm-up), y "reintentar a mano hasta que pase"
+# destruye la autoridad del gate.
+DEADLINE=$((SECONDS + HEALTH_DEADLINE))
+HEALTH_BODY=""
+HEALTH_STATUS=""
+while (( SECONDS < DEADLINE )); do
+  if HEALTH_BODY="$(curl --fail --silent --max-time 10 "$HEALTH_URL" 2>/dev/null)"; then
+    HEALTH_STATUS="$(printf '%s' "$HEALTH_BODY" | jq -r '.status // empty')"
+    [[ "$HEALTH_STATUS" == "ok" ]] && break
+  fi
+  sleep 3
+done
 if [[ "$HEALTH_STATUS" != "ok" ]]; then
-  echo "deploy: /salud respondio HTTP OK pero status='$HEALTH_STATUS' (esperado 'ok')." >&2
-  echo "deploy: la app esta viva pero degradada; el deploy no se acepta." >&2
-  echo "deploy: body recibido: $HEALTH_BODY" >&2
+  echo "deploy: smoke test FALLO — $HEALTH_URL no respondio status='ok' en ${HEALTH_DEADLINE}s." >&2
+  echo "deploy: ultimo body recibido: ${HEALTH_BODY:-<sin respuesta>}" >&2
   exit 6
 fi
 echo "deploy: smoke OK (status=ok)."

@@ -32,7 +32,7 @@
 - Hallazgos medios y bajos se registran como issues en GitHub y no bloquean.
 - El enforcement de identidad de los revisores es nativo de GitHub: branch protection (con required approving reviews: 2) + CODEOWNERS + "Require approval from someone other than the last pusher" + PATs con Pull requests write solo en las cuentas maquina de rol. El implementador no puede aprobar su propio PR ni simular ser otra cuenta. La tabla de cuentas por rol (unica fuente de verdad de nombres) y el checklist de activacion viven en `docs/identidades.md` — el enforcement rige recien cuando ese checklist esta completo.
 - Antes de mergear, quien mergea confirma visualmente en el PR que cada revision necesaria dejo comentario firmado desde su cuenta maquina esperada segun la tabla de `docs/identidades.md` (por ejemplo, revision de `qa` debe venir de `author = qa-fabrica-gg`). No hay script local que reemplace esto: el gate real es el de GitHub. Si un comentario firmado viene de otra cuenta, NO se mergea.
-- Si los checks estan verdes, todas las revisiones necesarias tienen comentario firmado desde su cuenta maquina, y no hay hallazgos bloqueantes: el merge lo hace un rol distinto del implementador.
+- Si los checks estan verdes, todas las revisiones necesarias tienen comentario firmado desde su cuenta maquina, y no hay hallazgos bloqueantes: **el merge lo ejecuta el operador**. Los PATs de rol no tienen contents write a proposito — ningun trabajador puede mergear. La garantia de no-autoaprobacion no depende de quien aprieta el boton: la da branch protection (2 aprobaciones + no-bypass).
 
 ## Definition of Done
 Una feature esta terminada cuando:
@@ -57,7 +57,7 @@ Este contrato es lo que separa "systemd reinicio algo" de "el commit desplegado 
 Version larga del contrato, checklist de las cinco validaciones que corre `deploy.sh`, y **guia de migracion para servicios existentes que aun no reportan `commit`** en `docs/salud-endpoint.md`.
 
 ## E2E por UI real
-Los tests de interfaz DEBEN ejercitar la UI real (Playwright contra la app viva), nunca solo seeds de base. Un flujo que solo pasa con seeds no cuenta como cubierto.
+Los tests de interfaz DEBEN ejercitar la UI real contra la app viva, nunca solo seeds de base. Un flujo que solo pasa con seeds no cuenta como cubierto. La herramienta concreta (Playwright u otra) la declara cada repo producto en su `contexto-producto.md` — el proceso exige el QUE, el producto elige el CON QUE.
 
 ## Operaciones como codigo
 - `scripts/deploy.sh` es el paso obligatorio del DoD. Cada repo producto lo parametriza via `scripts/deploy.env`: git pull --ff-only, migraciones si corresponde, restart del servicio declarado, smoke test que exige `status=ok` en el body de `/salud`, y confirmacion final de que el commit reportado por `/salud` coincide con el commit desplegado.

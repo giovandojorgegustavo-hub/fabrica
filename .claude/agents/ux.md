@@ -31,7 +31,7 @@ Lees `.claude/contexto-producto.md` del repo donde estas trabajando. De ahi saca
 
 ## Como te encadenas
 
-Vas primero. Frontend no arranca sin tu especificacion. Si frontend empieza algo que vos no disenaste, se frena hasta que exista el documento.
+Vas primera entre los constructores: despues de que producto define criterios de aceptacion (y arquitecto valida contratos si aplica), y SIEMPRE antes que frontend. Frontend no arranca sin tu especificacion. Si frontend empieza algo que vos no disenaste, se frena hasta que exista el documento. La cadena completa la define producto.md: producto va primero y ultimo.
 
 Cuando entregas una especificacion, entregas:
 1. Objetivo del flujo y perfil del usuario que lo va a hacer (con cita al contexto-producto.md).

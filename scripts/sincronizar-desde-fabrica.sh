@@ -82,21 +82,36 @@ if [[ ! -d ".git" ]]; then
 fi
 
 TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+# Temporales .sync-* creados en el working tree (issue #19): se registran
+# aca para que el trap los limpie si el script muere entre mktemp y mv.
+SYNC_TMPS=()
+trap 'rm -rf "$TMPDIR"; rm -f ${SYNC_TMPS[@]+"${SYNC_TMPS[@]}"}' EXIT
 
-URL="https://github.com/${REPO_FABRICA}/archive/${SHA}.tar.gz"
-echo "==> descargando $URL"
-if ! curl --fail --silent --show-error --location \
-       --proto '=https' --proto-redir '=https' \
-       --max-time 60 \
-       "$URL" -o "$TMPDIR/fabrica.tar.gz"; then
-  echo "sincronizar: no pude descargar $URL" >&2
-  exit 5
+echo "==> descargando commit $SHA de $REPO_FABRICA"
+if command -v gh >/dev/null 2>&1; then
+  # Issue #20: los archive URLs publicos devuelven 404 en repos privados.
+  # gh api usa la autenticacion del operador y funciona en ambos casos;
+  # ademas la API resuelve el SHA contra el repo canonico declarado arriba.
+  if ! gh api "repos/${REPO_FABRICA}/tarball/${SHA}" > "$TMPDIR/fabrica.tar.gz"; then
+    echo "sincronizar: gh api fallo descargando el tarball de $SHA" >&2
+    exit 5
+  fi
+else
+  # Fallback sin gh: solo funciona con repos publicos.
+  URL="https://github.com/${REPO_FABRICA}/archive/${SHA}.tar.gz"
+  echo "==> (sin gh) descargando $URL"
+  if ! curl --fail --silent --show-error --location \
+         --proto '=https' --proto-redir '=https' \
+         --max-time 60 \
+         "$URL" -o "$TMPDIR/fabrica.tar.gz"; then
+    echo "sincronizar: no pude descargar $URL (repo privado? instalar gh)" >&2
+    exit 5
+  fi
 fi
 
 echo "==> extrayendo"
 tar -xzf "$TMPDIR/fabrica.tar.gz" -C "$TMPDIR"
-SRC="$(find "$TMPDIR" -maxdepth 1 -type d -name 'fabrica-*' | head -n1)"
+SRC="$(find "$TMPDIR" -maxdepth 1 -type d -name '*fabrica-*' | head -n1)"
 if [[ -z "$SRC" || ! -d "$SRC" ]]; then
   echo "sincronizar: no encontre el directorio extraido en $TMPDIR" >&2
   exit 6
@@ -129,15 +144,33 @@ copiar_archivo() {
       ;;
   esac
 
-  mkdir -p "$(dirname "$dst")"
+  # Issue #19: dentro de una funcion invocada bajo `|| ...`, bash SUSPENDE
+  # set -e — cada comando necesita chequeo explicito, o un cp fallido a
+  # mitad (disco lleno) instalaria un archivo truncado con exit 0.
+  if ! mkdir -p "$(dirname "$dst")"; then
+    echo "sincronizar: mkdir fallo para $rel" >&2
+    return 1
+  fi
   # Copia via temporal + mv (rename atomico). NUNCA cp -f directo al destino:
   # este script esta en su propia allowlist, y cp -f truncaria el mismo inode
   # que bash esta leyendo mientras corre (ejecucion corrupta no determinista).
   # mv reemplaza la entrada de directorio y preserva el inode viejo abierto.
   local tmp
-  tmp="$(mktemp "$(dirname "$dst")/.sync-XXXXXX")"
-  cp -f "$src" "$tmp"
-  mv -f "$tmp" "$dst"
+  if ! tmp="$(mktemp "$(dirname "$dst")/.sync-XXXXXX")"; then
+    echo "sincronizar: mktemp fallo para $rel" >&2
+    return 1
+  fi
+  SYNC_TMPS+=("$tmp")
+  if ! cp -f "$src" "$tmp"; then
+    rm -f "$tmp"
+    echo "sincronizar: cp fallo para $rel (disco lleno?); temporal descartado, destino intacto" >&2
+    return 1
+  fi
+  if ! mv -f "$tmp" "$dst"; then
+    rm -f "$tmp"
+    echo "sincronizar: mv fallo para $rel; destino intacto" >&2
+    return 1
+  fi
   echo "  copiado: $rel"
 }
 
