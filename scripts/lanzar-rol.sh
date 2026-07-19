@@ -40,9 +40,13 @@ if [[ "$1" == "-f" ]]; then
     exit 2
   fi
   PROMPT_TEXT="$(cat "$PROMPT_FILE")"
+  shift 2
 else
   PROMPT_TEXT="$1"
+  shift
 fi
+# Los argumentos restantes se pasan tal cual a claude. El vigilante los usa
+# para restringir la sesion (ej: --allowedTools "Bash(gh:*)").
 
 # Allowlist estricta: solo los roles REVISORES tienen identidad propia con
 # token (ver docs/identidades.md). Los roles implementadores (backend,
@@ -103,4 +107,4 @@ export GITHUB_TOKEN
 FULL_PROMPT="$(printf '%s\n\n---\n\nPedido del usuario:\n\n%s\n' "$ROL_TEXT" "$PROMPT_TEXT")"
 
 echo "lanzar-rol: rol=$ROL token=$TOKEN_FILE" >&2
-exec claude -p "$FULL_PROMPT"
+exec claude -p "$FULL_PROMPT" "$@"
