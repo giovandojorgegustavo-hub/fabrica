@@ -2,11 +2,16 @@
 # scripts/lanzar-rol.sh — mini-lanzador de identidades por rol.
 #
 # Uso:
-#   scripts/lanzar-rol.sh <rol> <prompt_o_ruta>
+#   scripts/lanzar-rol.sh <rol> <prompt>
+#   scripts/lanzar-rol.sh <rol> -f <archivo_con_prompt>
 #
 # Ejemplos:
 #   scripts/lanzar-rol.sh qa "revisa el PR #42"
-#   scripts/lanzar-rol.sh seguridad prompts/pr-42.txt
+#   scripts/lanzar-rol.sh seguridad -f prompts/pr-42.txt
+#
+# El flag -f es EXPLICITO (issue #23): antes se adivinaba con [[ -f ]] y un
+# prompt literal que coincidiera con un path existente se reemplazaba en
+# silencio por el contenido del archivo.
 #
 # Lee `.claude/agents/<rol>.md` como prompt del rol, y `/etc/fabrica/tokens/<rol>.token`
 # como el PAT de la cuenta maquina del rol. Inyecta el token via variable de
@@ -18,12 +23,26 @@
 set -euo pipefail
 
 if [[ $# -lt 2 ]]; then
-  echo "uso: $0 <rol> <prompt_o_ruta>" >&2
+  echo "uso: $0 <rol> <prompt>   |   $0 <rol> -f <archivo>" >&2
   exit 2
 fi
 
 ROL="$1"
-PROMPT_ARG="$2"
+shift
+if [[ "$1" == "-f" ]]; then
+  if [[ $# -lt 2 ]]; then
+    echo "lanzar-rol: -f requiere un archivo" >&2
+    exit 2
+  fi
+  PROMPT_FILE="$2"
+  if [[ ! -f "$PROMPT_FILE" ]]; then
+    echo "lanzar-rol: no existe el archivo de prompt '$PROMPT_FILE'" >&2
+    exit 2
+  fi
+  PROMPT_TEXT="$(cat "$PROMPT_FILE")"
+else
+  PROMPT_TEXT="$1"
+fi
 
 # Allowlist estricta: solo los roles REVISORES tienen identidad propia con
 # token (ver docs/identidades.md). Los roles implementadores (backend,
@@ -48,10 +67,17 @@ fi
 
 TOKEN_FILE="/etc/fabrica/tokens/${ROL}.token"
 
-if [[ -f "$PROMPT_ARG" ]]; then
-  PROMPT_TEXT="$(cat "$PROMPT_ARG")"
-else
-  PROMPT_TEXT="$PROMPT_ARG"
+# Issue #23: mensaje honesto para roles cuya cuenta maquina aun no existe
+# (ver tabla en docs/identidades.md) — el diagnostico "grupo fabrica-tokens"
+# era equivocado para este caso.
+if [[ ! -e "$TOKEN_FILE" ]]; then
+  case "$ROL" in
+    arquitecto|producto)
+      echo "lanzar-rol: el rol '$ROL' aun no tiene cuenta maquina ni token (ver tabla en docs/identidades.md)." >&2
+      echo "lanzar-rol: ese rol firma por convencion, sin lanzador, hasta que la cuenta se cree." >&2
+      exit 4
+      ;;
+  esac
 fi
 
 ROL_TEXT="$(cat "$ROL_FILE")"
@@ -64,6 +90,12 @@ ROL_TEXT="$(cat "$ROL_FILE")"
 if ! GITHUB_TOKEN="$(cat "$TOKEN_FILE" 2>/dev/null)" || [[ -z "$GITHUB_TOKEN" ]]; then
   echo "lanzar-rol: no puedo leer $TOKEN_FILE (no existe, esta vacio, o no tengo permisos)" >&2
   echo "lanzar-rol: el operador debe pertenecer al grupo fabrica-tokens; ver docs/identidades.md." >&2
+  exit 4
+fi
+# Issue #23: validar forma del PAT aca — un archivo con basura fallaria
+# recien dentro de la sesion, lejos de la causa.
+if [[ ! "$GITHUB_TOKEN" =~ ^(ghp_|github_pat_) ]]; then
+  echo "lanzar-rol: el contenido de $TOKEN_FILE no parece un PAT de GitHub (prefijo ghp_ o github_pat_)." >&2
   exit 4
 fi
 export GITHUB_TOKEN

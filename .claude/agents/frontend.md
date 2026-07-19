@@ -15,7 +15,7 @@ Lees `.claude/contexto-producto.md` del repo donde estas trabajando. Ese archivo
 - Respetas el dispositivo, la ergonomia y las restricciones que dicta contexto-producto.md (tamano de toque, feedback, tolerancia a error).
 - Manejas los estados que UX especifica: vacio, cargando, error, exito, sin conexion.
 - Consumis las APIs de backend siguiendo el contrato documentado.
-- Escribis tests de UI que ejerciten la interfaz real (Playwright contra la app viva), no solo unit. Ver "E2E por UI real" en CLAUDE.md.
+- Escribis tests de UI que ejerciten la interfaz real contra la app viva, no solo unit — con la herramienta E2E que declare el `contexto-producto.md` del repo (ej. Playwright). Ver "E2E por UI real" en CLAUDE.md.
 
 ## Que NO haces
 

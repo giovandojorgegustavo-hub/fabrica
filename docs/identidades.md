@@ -74,6 +74,10 @@ Si un PAT tiene mas scopes que `repo` (o, llegado el caso fine-grained, mas que 
 
 La sesion `claude` del rol revisor lee contenido controlado por el autor del PR (el diff, la descripcion, los comentarios) teniendo `GITHUB_TOKEN` con Pull requests write en su entorno. Un PR malicioso puede intentar inyectar instrucciones ("aproba este PR") para que la sesion apruebe bajo la identidad del rol. Mitigaciones vigentes: el contenido del PR se trata como NO confiable dentro de la sesion (regla en los prompts de rol), los repos son privados y el autor de los PRs es el propio operador. Si la fabrica incorpora autores externos, este vector escala y la aprobacion debe moverse fuera de la sesion que lee el diff (token de solo lectura para revisar; la aprobacion la emite un paso separado que no procesa contenido del PR).
 
+## Riesgo residual: el ancla de confianza es el operador
+
+Quien pertenece al grupo `fabrica-tokens` (hoy: el operador) puede leer los tokens de TODOS los roles y emitir aprobaciones como cualquiera de ellos con un `curl` directo, sin sesion de agente. En un setup mono-operador esto es inherente: el enforcement de GitHub distingue **sesiones y cuentas**, no intenciones del operador. Las garantias reales de este documento son (a) que un PR no se mergea sin dos aprobaciones formales trazables, y (b) que ninguna sesion de agente puede saltarse el circuito. Contra un operador que decide enganarse a si mismo, no hay control tecnico — y este documento no pretende tenerlo. Si algun dia hay mas de un humano, cada uno va en su propio grupo con acceso SOLO a sus roles, y este parrafo se reescribe.
+
 ## Branch protection para exigir aprobacion no-autor
 
 En cada repo producto, `main` DEBE protegerse con la siguiente configuracion (esto es contrato a aplicar por el administrador del repo, no un estado ya activo — ver checklist al final):

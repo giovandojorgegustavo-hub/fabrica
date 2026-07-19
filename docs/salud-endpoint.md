@@ -88,6 +88,17 @@ deploy: OK.
 
 Si el deploy sigue fallando con exit 9 ("el proceso vivo reporta commit X pero se desplego Y"), es porque el servicio efectivamente NO esta corriendo el checkout que `deploy.sh` cree. Ese es un bug real que el script esta cazando: el `WorkingDirectory` de la unit systemd probablemente apunta a otro path. Corregi la unit, no el contrato.
 
+## Sudoers minimo para deploy.sh
+
+`deploy.sh` ejecuta exactamente un comando con sudo: `sudo systemctl restart <SERVICE_NAME>`. La regla sudoers debe ser igual de exacta (issue #22) — un sudo amplio convierte cualquier compromiso del entorno del operador en root:
+
+```
+# /etc/sudoers.d/fabrica-deploy — una linea por servicio, unit EXACTA:
+<operador> ALL=(root) NOPASSWD: /usr/bin/systemctl restart <service-name>.service
+```
+
+Sin comodines en el nombre de la unit, sin `systemctl *`, sin otros verbos. Si el operador ya tiene sudo general, esta regla no agrega nada — pero es el contrato correcto para hosts donde se quiera acotar.
+
 ## Que NO hace este endpoint
 
 - No es un healthcheck de liveness para load balancers (aunque puede reutilizarse). Este endpoint sirve al circuito de deploy: verifica que "el commit que quise desplegar esta vivo". Un LB podria pedir un endpoint mas barato o mas frecuente.
