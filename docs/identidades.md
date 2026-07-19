@@ -59,7 +59,7 @@ Esto cierra la puerta a que el implementador se autoaprueba: GitHub exige que la
 
 ## Verificacion tecnica de la firma (author.login)
 
-La firma textual (`**Rol**: qa`, `**Rol**: seguridad`, etc.) es solo formato. **No prueba nada por si sola**: cualquiera con `pull_request:write` puede escribir esos strings.
+La firma textual (`**Rol**: qa`, `**Rol**: seguridad`, etc.) es solo formato de lectura. **No prueba nada por si sola**: cualquiera con `pull_request:write` puede escribir esos strings.
 
 La prueba real es que el `author.login` del comentario en la API de GitHub sea la cuenta maquina esperada:
 
@@ -70,23 +70,38 @@ La prueba real es que el `author.login` del comentario en la API de GitHub sea l
 | `arquitecto`             | `fabrica-arquitecto`    |
 | `producto`               | `fabrica-producto`      |
 
-### Enforcement mecanico
+## Enforcement de identidad: nativo de GitHub, no de scripts
 
-Antes de mergear cualquier PR, quien mergea corre:
+El enforcement de que "solo la cuenta maquina de un rol puede aprobar/comentar como ese rol" NO se hace con scripts locales. Se hace con la configuracion nativa de GitHub. La combinacion de cuatro mecanismos ya activos deja la puerta cerrada:
 
-```
-scripts/verificar-firmas.sh <PR> [--con-arquitecto] [--con-producto]
-```
+1. **Branch protection + "Require approval from someone other than the last pusher"**: GitHub bloquea el merge si la unica aprobacion viene de quien pusheo el ultimo commit. El implementador **no puede aprobar su propio PR**, sin importar que comente en el body.
 
-El script consulta la API de GitHub via `gh`, encuentra los comentarios con marcador `**Rol**: <rol>`, y falla si:
-- Falta la revision firmada de un rol requerido.
-- Existe un comentario que dice ser de un rol pero su `author.login` NO es la cuenta maquina esperada (por ejemplo, el implementador postea un comentario disfrazado de `seguridad`: el script lo detecta como SOSPECHOSO).
+2. **Branch protection + "Require review from Code Owners"**: los `CODEOWNERS` del repo listan las cuentas maquina como duenas de los paths criticos. Un PR que toque esos paths exige aprobacion (no solo comentario) de la cuenta maquina correspondiente.
 
-Sin `verificar-firmas.sh` pasando limpio, el merge no se hace. Esta regla la aplica quien mergea (rol distinto del implementador).
+3. **PATs restringidos por cuenta**: el PAT con `pull_request:write` vive solo en las cuentas maquina de rol. El PAT del implementador NO tiene esas cuentas ni puede simularlas. Un comentario o aprobacion "firmado" como `qa` que venga de otra cuenta queda visible en `author.login` en la UI de GitHub y en la API — no puede falsificarse desde otro token.
 
-### Cuentas maquina no pueden bypasear branch protection
+4. **Branch protection + "Do not allow bypassing"**: nadie (incluido admin) puede saltear las reglas anteriores sin dejar rastro. Ninguna cuenta maquina de rol figura en la "Bypass list": los revisores aprueban, **no bypasean**. Esto se audita en la revision de `seguridad` de cualquier PR que toque configuracion del repo.
 
-Ninguna cuenta maquina de rol figura en la "Bypass list" de branch protection de los repos producto. Los revisores aprueban, no bypasean. Esto se audita en la revision de `seguridad` de cualquier PR que toque configuracion del repo.
+Con esos cuatro mecanismos activos, la firma textual (`**Rol**: qa`) queda como convencion para lectura humana; la garantia real de identidad la da GitHub, no un script. Quien mergea confirma visualmente que cada comentario firmado necesario aparece con `author` = cuenta maquina esperada — no necesita ejecutar nada.
+
+### Por que este repo NO trae un script de verificacion
+
+Una version previa de este circuito proponia un `scripts/verificar-firmas.sh` que consultara la API de GitHub y comparara `author.login` contra la cuenta esperada antes del merge. Se descarto por dos razones:
+
+1. **Duplicaria lo que GitHub ya hace nativamente**. Los cuatro mecanismos de arriba ya impiden que una identidad falsa apruebe. Un script cliente que ademas grepea comentarios agrega superficie sin cerrar nada nuevo.
+2. **El enforcement en cliente es esquivable por diseno**. Cualquier chequeo local se salta con no correrlo. El enforcement de politica tiene que vivir donde no se pueda esquivar — el servidor de GitHub, via branch protection + CODEOWNERS. Cualquier "gate" que dependa de que el operador humano se acuerde de correr un script es honor system, no enforcement.
+
+Si en el futuro se necesita un chequeo automatizado adicional (por ejemplo, "el PR debe tener un comentario firmado de `fabrica-qa` antes de habilitar el merge"), va como **GitHub Action** en el mismo repo, no como script local. Una Action corre siempre y se ve en los required status checks — no se puede omitir.
+
+## Endpoint de salud
+
+El contrato del endpoint `/salud` que cierra la Definition of Done ("desplegado y verificado") vive en [`docs/salud-endpoint.md`](salud-endpoint.md). Ese documento incluye:
+
+- El JSON minimo que debe devolver (`status` + `commit`).
+- Las cinco condiciones que `scripts/deploy.sh` valida antes de aceptar el deploy.
+- **Guia de migracion para servicios existentes** que ya tienen `/salud` pero aun no reportan el campo `commit` (tres pasos: capturar el SHA en build/arranque, exponerlo en el JSON, verificar con `deploy.sh`).
+
+Este archivo (`identidades.md`) declara el contrato de identidades y credenciales; `salud-endpoint.md` declara el contrato del endpoint de salud. Ambos son parte del contrato general que fabrica exige a cada repo producto.
 
 ## Que hace `scripts/lanzar-rol.sh`
 

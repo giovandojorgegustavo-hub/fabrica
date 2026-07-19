@@ -2,45 +2,76 @@
 # scripts/sincronizar-desde-fabrica.sh — actualiza los artefactos vendored de fabrica.
 #
 # Uso:
-#   scripts/sincronizar-desde-fabrica.sh <tag>
+#   scripts/sincronizar-desde-fabrica.sh <sha-commit-40-hex>
 #
 # Ejemplo:
-#   scripts/sincronizar-desde-fabrica.sh v0.2.0
+#   scripts/sincronizar-desde-fabrica.sh 539c6a0219bbd375116bee035d729a48327f911a
 #
 # Este script vive en fabrica como referencia canonica. Cada repo producto lo
-# copia (vendored) y lo mantiene alineado con la version que consume.
+# copia (vendored) y lo mantiene alineado con el commit que consume.
 #
-# Que hace:
-#   1. Descarga el tarball del tag desde el repo fabrica en GitHub.
-#   2. Extrae y reemplaza en el repo actual:
-#        CLAUDE.md
-#        .claude/agents/*.md
-#        scripts/deploy.sh
-#        scripts/lanzar-rol.sh
-#        scripts/sincronizar-desde-fabrica.sh   (el mismo script se autoactualiza)
-#        docs/identidades.md
-#        docs/adr/*.md                          (los ADRs referenciados)
-#   3. Actualiza .fabrica-version con el tag nuevo.
+# Que hace (y solo esto):
+#   1. Descarga el tarball del commit SHA desde el repo fabrica en GitHub.
+#   2. Copia UNO A UNO los archivos declarados en la ALLOWLIST de abajo.
+#   3. Actualiza FABRICA_VERSION con el SHA nuevo.
 #   4. Deja el checkout con cambios sin commitear, listos para armar el PR.
+#
+# Que NUNCA hace:
+#   - rm -rf, ni ningun borrado recursivo.
+#   - Copiar directorios completos (siempre archivo por archivo).
+#   - Tocar docs/adr/ (los ADRs son del repo producto).
+#   - Tocar .claude/contexto-producto.md (el contexto de usuario es del repo producto).
+#   - Tocar archivos fuera de la ALLOWLIST.
+#   - Aceptar override del repo de origen por variable de entorno.
+#
+# El path del repo canonico esta hardcodeado abajo. Cambiarlo requiere editar
+# este script y revisar el diff en un PR (qa + seguridad + arquitecto).
 #
 # El commit y el PR los hace el operador humano, con revision qa + seguridad
 # (y arquitecto si el diff toca contratos). Ver docs/adr/001-sync-fabrica-a-repos-producto.md.
 
 set -euo pipefail
 
-REPO_FABRICA="${REPO_FABRICA:-giovandojorgegustavo-hub/fabrica}"
+# Repo canonico de fabrica. HARDCODEADO a proposito: no se acepta override.
+readonly REPO_FABRICA="giovandojorgegustavo-hub/fabrica"
+
+# Allowlist explicita de archivos que fabrica propaga a los repos producto.
+# Cada linea es un path relativo a la raiz del repo. Solo archivos regulares:
+# nunca directorios, nunca globs, nunca symlinks.
+#
+# Los repos producto son dueños de todo lo que NO este listado aca, en
+# particular:
+#   - docs/adr/            (ADRs propios del producto)
+#   - .claude/contexto-producto.md
+#   - src/, tests/, migrations/
+#   - scripts/deploy.env, .fabrica-version legacy, etc.
+readonly ALLOWLIST=(
+  "CLAUDE.md"
+  ".claude/agents/backend.md"
+  ".claude/agents/frontend.md"
+  ".claude/agents/ux.md"
+  ".claude/agents/qa.md"
+  ".claude/agents/seguridad.md"
+  ".claude/agents/arquitecto.md"
+  ".claude/agents/producto.md"
+  "scripts/deploy.sh"
+  "scripts/lanzar-rol.sh"
+  "scripts/sincronizar-desde-fabrica.sh"
+  "docs/identidades.md"
+  "docs/salud-endpoint.md"
+)
 
 if [[ $# -ne 1 ]]; then
-  echo "uso: $0 <tag>" >&2
-  echo "ej: $0 v0.2.0" >&2
+  echo "uso: $0 <sha-commit-40-hex>" >&2
+  echo "ej:  $0 539c6a0219bbd375116bee035d729a48327f911a" >&2
   exit 2
 fi
 
-TAG="$1"
+SHA="$1"
 
-# Valida forma semver antes de tocar red o disco.
-if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "sincronizar: tag invalido '$TAG'. Formato esperado: vMAYOR.MENOR.PARCHE (ej: v0.2.0)." >&2
+# Valida forma de SHA (40 hex minusculas) antes de tocar red o disco.
+if [[ ! "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "sincronizar: sha invalido '$SHA'. Formato esperado: 40 hex minusculas." >&2
   exit 3
 fi
 
@@ -52,7 +83,7 @@ fi
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-URL="https://github.com/${REPO_FABRICA}/archive/refs/tags/${TAG}.tar.gz"
+URL="https://github.com/${REPO_FABRICA}/archive/${SHA}.tar.gz"
 echo "==> descargando $URL"
 if ! curl --fail --silent --show-error --location \
        --proto '=https' --proto-redir '=https' \
@@ -70,35 +101,47 @@ if [[ -z "$SRC" || ! -d "$SRC" ]]; then
   exit 6
 fi
 
-copiar() {
+copiar_archivo() {
   local rel="$1"
   local src="$SRC/$rel"
   local dst="./$rel"
-  if [[ ! -e "$src" ]]; then
-    echo "sincronizar: $rel no existe en el tag $TAG, salto" >&2
+
+  # No seguir symlinks del tarball.
+  if [[ -L "$src" ]]; then
+    echo "sincronizar: $rel es symlink en el tarball; rechazo por seguridad." >&2
+    return 1
+  fi
+  if [[ ! -f "$src" ]]; then
+    echo "sincronizar: $rel no existe como archivo regular en el commit $SHA, salto." >&2
     return 0
   fi
+
+  # Rechazo mkdir sobre paths con '..' (defensa aunque el allowlist ya lo evita).
+  case "$rel" in
+    *..*|/*)
+      echo "sincronizar: path invalido '$rel'; rechazo." >&2
+      return 1
+      ;;
+  esac
+
   mkdir -p "$(dirname "$dst")"
-  if [[ -d "$src" ]]; then
-    rm -rf "$dst"
-    cp -a "$src" "$dst"
-  else
-    cp -a "$src" "$dst"
-  fi
+  # cp -f sobreescribe el archivo destino sin borrar nada mas. Nunca rm -rf.
+  cp -f "$src" "$dst"
   echo "  copiado: $rel"
 }
 
-echo "==> vendoring artefactos"
-copiar "CLAUDE.md"
-copiar ".claude/agents"
-copiar "scripts/deploy.sh"
-copiar "scripts/lanzar-rol.sh"
-copiar "scripts/sincronizar-desde-fabrica.sh"
-copiar "docs/identidades.md"
-copiar "docs/adr"
+echo "==> vendoring (allowlist de ${#ALLOWLIST[@]} archivos, sin borrado)"
+FALLOS=0
+for rel in "${ALLOWLIST[@]}"; do
+  copiar_archivo "$rel" || FALLOS=$((FALLOS + 1))
+done
+if [[ $FALLOS -gt 0 ]]; then
+  echo "sincronizar: $FALLOS archivos fallaron. Revisa arriba." >&2
+  exit 7
+fi
 
-printf '%s\n' "$TAG" > .fabrica-version
-echo "==> .fabrica-version -> $TAG"
+printf '%s\n' "$SHA" > FABRICA_VERSION
+echo "==> FABRICA_VERSION -> $SHA"
 
 echo
 echo "sincronizar: listo. Cambios sin commitear."

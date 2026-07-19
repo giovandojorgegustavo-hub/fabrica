@@ -30,8 +30,9 @@
 - **Cambio estructural** (esquema, contratos entre modulos, dependencias nuevas, acoplamiento): exige revision de `arquitecto`.
 - Hallazgos criticos o altos bloquean el merge hasta ser resueltos.
 - Hallazgos medios y bajos se registran como issues en GitHub y no bloquean.
-- Antes de mergear, quien mergea corre `scripts/verificar-firmas.sh <PR>` (mas `--con-arquitecto` / `--con-producto` si corresponde). El script valida que cada revision firmada venga de la cuenta maquina `fabrica-<rol>` real, no solo que el body diga `**Rol**: <rol>`. Sin `verificar-firmas.sh` en verde, el merge no se hace.
-- Si los checks estan verdes, `verificar-firmas.sh` pasa, todas las revisiones necesarias dejaron comentario firmado, y no hay bloqueantes: el merge lo hace un rol distinto del implementador.
+- El enforcement de identidad de los revisores es nativo de GitHub: branch protection + CODEOWNERS + "Require approval from someone other than the last pusher" + PATs con `pull_request:write` solo en las cuentas maquina `fabrica-<rol>`. El implementador no puede aprobar su propio PR ni simular ser otra cuenta. Detalle en `docs/identidades.md`.
+- Antes de mergear, quien mergea confirma visualmente en el PR que cada revision necesaria dejo comentario firmado desde su cuenta maquina esperada (por ejemplo, revision de `qa` debe venir de `author = fabrica-qa`). No hay script local que reemplace esto: el gate real es el de GitHub. Si un comentario firmado viene de otra cuenta, NO se mergea.
+- Si los checks estan verdes, todas las revisiones necesarias tienen comentario firmado desde su cuenta maquina, y no hay hallazgos bloqueantes: el merge lo hace un rol distinto del implementador.
 
 ## Definition of Done
 Una feature esta terminada cuando:
@@ -53,13 +54,12 @@ Cada repo producto expone `/salud` (o el path que declare `HEALTH_URL`) devolvie
 
 Este contrato es lo que separa "systemd reinicio algo" de "el commit desplegado esta vivo".
 
+Version larga del contrato, checklist de las cinco validaciones que corre `deploy.sh`, y **guia de migracion para servicios existentes que aun no reportan `commit`** en `docs/salud-endpoint.md`.
+
 ## E2E por UI real
 Los tests de interfaz DEBEN ejercitar la UI real (Playwright contra la app viva), nunca solo seeds de base. Un flujo que solo pasa con seeds no cuenta como cubierto.
 
 ## Operaciones como codigo
 - `scripts/deploy.sh` es el paso obligatorio del DoD. Cada repo producto lo parametriza via `scripts/deploy.env`: git pull --ff-only, migraciones si corresponde, restart del servicio declarado, smoke test que exige `status=ok` en el body de `/salud`, y confirmacion final de que el commit reportado por `/salud` coincide con el commit desplegado.
 - `scripts/lanzar-rol.sh` es el mini-lanzador de identidades: recibe rol y prompt/archivo, lanza una sesion claude con el rol y el token correspondiente. Ver `docs/identidades.md` para el layout de tokens y la configuracion de branch protection.
-- `scripts/sincronizar-desde-fabrica.sh` es el mecanismo canonico de propagacion. Fabrica publica tags semver; cada repo producto declara la version que consume en `.fabrica-version` y actualiza corriendo este script contra el tag nuevo, abriendo un PR con el diff. Detalle y racional en `docs/adr/001-sync-fabrica-a-repos-producto.md`.
-
-## Versiones
-- Los tags de version siguen semver (vMAYOR.MENOR.PARCHE).
+- `scripts/sincronizar-desde-fabrica.sh` es el mecanismo canonico de propagacion. Fabrica NO publica tags: cada repo producto declara en `FABRICA_VERSION` el commit SHA (40 hex) de fabrica que consume. El script descarga el tarball de ese SHA, copia SOLO los archivos declarados en su allowlist explicita (nunca directorios, nunca `rm -rf`), y NUNCA toca `docs/adr/`, `.claude/contexto-producto.md` ni archivos propios del repo producto. Cada actualizacion se abre como PR y pasa por qa + seguridad. Detalle y racional en `docs/adr/001-sync-fabrica-a-repos-producto.md`.
