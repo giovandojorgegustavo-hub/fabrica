@@ -49,14 +49,24 @@ El PAT que vive en `/etc/fabrica/tokens/<rol>.token` pertenece a la cuenta maqui
 
 ## Permisos minimos del PAT
 
-Cada PAT es **fine-grained** (los scopes clasicos de PAT no permiten este recorte: alli `repo` es todo-o-nada), restringido a los repos donde el rol revisa, con:
+El ideal del contrato es **fine-grained**, restringido a los repos donde el rol revisa, con:
 
 - **Contents: Read-only** — leer contenido, commits y diffs.
 - **Pull requests: Read and write** — leer PRs y dejar comentario firmado / aprobar / pedir cambios.
 
-Y nada mas. Sin Contents write (el token no puede pushear codigo). Sin Workflows. Sin Administration. Sin Packages.
+### Excepcion vigente: PAT clasico con scope `repo`
 
-Si un PAT tiene mas de lo listado, es un hallazgo bloqueante y `seguridad` debe reportarlo.
+GitHub HOY no soporta fine-grained PATs sobre repos de OTRA cuenta donde solo sos colaborador (limitacion documentada: el selector de repos de un fine-grained token solo lista repos propios del resource owner). Como los repos de la fabrica pertenecen a la cuenta del operador y las cuentas maquina son colaboradoras, los tokens de rol son **PAT clasico con scope `repo` unicamente** — el minimo clasico que permite revisar PRs privados. Sin `workflow`, sin `admin:*`, sin `delete_repo`, sin nada mas.
+
+`repo` clasico incluye mas de lo deseado (contents write). Controles compensatorios mientras dure la excepcion:
+
+- Branch protection en `main` rechaza push directo de cualquier cuenta — el contents write del token no alcanza la rama que importa.
+- Expiracion corta (30 dias) y rotacion al vencer.
+- Alcance humano: las cuentas maquina solo colaboran en los repos de la fabrica.
+
+**Fix definitivo** (si se quiere volver al recorte fine-grained): mover los repos a una organizacion; alli el fine-grained PAT con resource owner = organizacion si permite seleccionar repos y recortar permisos por repo.
+
+Si un PAT tiene mas scopes que `repo` (o, llegado el caso fine-grained, mas que los dos permisos listados), es un hallazgo bloqueante y `seguridad` debe reportarlo.
 
 **Aclaracion sobre write a nivel cuenta vs token**: para que GitHub considere a una cuenta en CODEOWNERS, la cuenta necesita permiso **Write** en el repo como colaborador. Ese write es de la CUENTA; el PAT fine-grained que usa el circuito NO incluye Contents write, asi que el token del rol no puede pushear. El riesgo residual (la cuenta podria pushear con otra credencial propia) se cierra con branch protection: `main` protegida rechaza push directo de cualquiera, incluidas las cuentas maquina. El modelo de minimo privilegio es: cuenta con write formal + token recortado + rama protegida.
 
@@ -118,8 +128,8 @@ Con esos cuatro mecanismos activos, la firma textual (`**Rol**: qa`) queda como 
 El operador/administrador verifica cada item y recien entonces el circuito ofrece sus garantias. Mientras falte alguno, todo merge es honor system y debe tratarse como tal:
 
 - [ ] Cuentas maquina de qa y seguridad creadas (ver tabla) e invitadas con Write a cada repo producto y a fabrica.
-- [ ] PAT fine-grained generado por cuenta, con los permisos minimos de este doc, guardado en `/etc/fabrica/tokens/<rol>.token`.
-- [ ] Grupo `fabrica-tokens` creado; tokens `root:fabrica-tokens 640`; operador en el grupo.
+- [ ] PAT generado por cuenta segun "Permisos minimos del PAT" (hoy: clasico con scope `repo` unicamente, por la excepcion vigente), guardado en `/etc/fabrica/tokens/<rol>.token`.
+- [ ] Grupo `fabrica-tokens` creado; directorio `/etc/fabrica/tokens` con `root:fabrica-tokens 750`; tokens `root:fabrica-tokens 640`; operador en el grupo.
 - [ ] Branch protection aplicada en `main` de cada repo con TODOS los items de la seccion "Branch protection" (incluido Required approving reviews: 2 y no-bypass).
 - [ ] Verificacion practica: un PR de prueba NO se puede mergear sin las dos aprobaciones ni con la aprobacion del propio autor.
 
@@ -130,7 +140,7 @@ Una version previa de este circuito proponia un `scripts/verificar-firmas.sh` qu
 1. **Duplicaria lo que GitHub ya hace nativamente**. Los cuatro mecanismos de arriba ya impiden que una identidad falsa apruebe. Un script cliente que ademas grepea comentarios agrega superficie sin cerrar nada nuevo.
 2. **El enforcement en cliente es esquivable por diseno**. Cualquier chequeo local se salta con no correrlo. El enforcement de politica tiene que vivir donde no se pueda esquivar — el servidor de GitHub, via branch protection + CODEOWNERS. Cualquier "gate" que dependa de que el operador humano se acuerde de correr un script es honor system, no enforcement.
 
-Si en el futuro se necesita un chequeo automatizado adicional (por ejemplo, "el PR debe tener un comentario firmado de `fabrica-qa` antes de habilitar el merge"), va como **GitHub Action** en el mismo repo, no como script local. Una Action corre siempre y se ve en los required status checks — no se puede omitir.
+Si en el futuro se necesita un chequeo automatizado adicional (por ejemplo, "el PR debe tener un comentario firmado de la cuenta maquina de qa segun la tabla antes de habilitar el merge"), va como **GitHub Action** en el mismo repo, no como script local. Una Action corre siempre y se ve en los required status checks — no se puede omitir.
 
 ## Endpoint de salud
 
