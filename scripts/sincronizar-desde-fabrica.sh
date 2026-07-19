@@ -166,6 +166,14 @@ copiar_archivo() {
     echo "sincronizar: cp fallo para $rel (disco lleno?); temporal descartado, destino intacto" >&2
     return 1
   fi
+  # Issue #27: mktemp crea el temporal con modo 0600 y mv hereda ESE modo, no
+  # el del archivo fuente — los scripts llegaban sin bit de ejecucion y el
+  # vigilante (correctamente) se negaba a usar un lanzador no ejecutable.
+  if ! chmod --reference="$src" "$tmp"; then
+    rm -f "$tmp"
+    echo "sincronizar: chmod fallo para $rel; temporal descartado, destino intacto" >&2
+    return 1
+  fi
   if ! mv -f "$tmp" "$dst"; then
     rm -f "$tmp"
     echo "sincronizar: mv fallo para $rel; destino intacto" >&2

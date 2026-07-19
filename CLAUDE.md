@@ -23,6 +23,7 @@
 ## Pull Requests
 - Todo merge a main pasa por Pull Request en GitHub.
 - El PR muestra el diff completo: se lee ANTES de aprobar.
+- **PRs encadenados**: antes de mergear el PR padre con borrado de rama, reapuntar los hijos a main (gh pr edit <hijo> --base main). GitHub CIERRA (no retargetea) un PR cuya rama base se borra, y un PR cerrado con base borrada no puede reabrirse — hay que crear uno nuevo y re-revisar (leccion del issue #28).
 
 ## Circuito de revision (cableado por evento)
 - **Todo PR de codigo**: recibe revision de `qa` Y `seguridad`, como sesiones separadas del implementador, con comentario firmado en el PR.
