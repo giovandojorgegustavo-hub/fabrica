@@ -1,0 +1,3 @@
+# Revisores obligatorios via branch protection (Require review from Code Owners)
+# qa y seguridad son cuentas maquina con token propio — ver docs/identidades.md
+*   @qa-fabrica-gg @seguridad-fabrica-gg
