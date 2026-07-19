@@ -1,0 +1,8 @@
+# Revisores obligatorios via branch protection (Require review from Code Owners)
+# qa y seguridad son cuentas maquina con token propio — ver docs/identidades.md
+#
+# OJO semantica de GitHub: varios owners en una linea = basta la aprobacion de
+# UNO (OR, no Y). El "qa Y seguridad" lo garantiza branch protection con
+# "Required approving reviews: 2" — ver docs/identidades.md, seccion
+# "Limitacion de CODEOWNERS".
+*   @qa-fabrica-gg @seguridad-fabrica-gg
