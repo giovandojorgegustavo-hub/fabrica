@@ -10,12 +10,26 @@
 #   MIGRATIONS_CMD=<comando o vacio>      # ej: python3 scripts/migrar.py
 #   BRANCH=<rama viva>                    # default: main
 #
+# Contrato del endpoint de salud (obligatorio para el DoD):
+#   HTTP 200 + JSON con al menos { "status": "ok", "commit": "<sha completo>" }.
+#   - "status" != "ok" -> app degradada -> el deploy falla aunque HTTP sea 200.
+#   - "commit" != commit desplegado -> el proceso vivo corre otro codigo ->
+#     el deploy falla. Esto cubre el caso de "systemd reinicio pero el
+#     WorkingDirectory apunta al checkout viejo".
+#
+# Dependencias: jq (para leer el JSON de salud sin regex fragil).
+#
 # Falla claro y se detiene en cuanto una etapa no cumple. Cada etapa imprime
 # lo que hace, y la ultima confirma que el proceso vivo esta corriendo el
-# commit nuevo comparando el timestamp de inicio del servicio antes y despues
-# del restart.
+# commit nuevo comparando el hash reportado por /salud contra el commit
+# desplegado ademas del timestamp de inicio del servicio.
 
 set -euo pipefail
+
+if ! command -v jq >/dev/null 2>&1; then
+  echo "deploy: falta 'jq' (necesario para leer el JSON del endpoint de salud)." >&2
+  exit 2
+fi
 
 CONFIG="${DEPLOY_CONFIG:-scripts/deploy.env}"
 if [[ ! -f "$CONFIG" ]]; then
@@ -63,17 +77,36 @@ fi
 echo "deploy: $SERVICE_NAME reinicio: $BEFORE_TS -> $AFTER_TS"
 
 echo "==> [4/5] smoke test contra $HEALTH_URL"
-if ! curl --fail --silent --show-error --max-time 10 "$HEALTH_URL" > /dev/null; then
-  echo "deploy: smoke test FALLO en $HEALTH_URL" >&2
+HEALTH_BODY="$(curl --fail --silent --show-error --max-time 10 "$HEALTH_URL")" || {
+  echo "deploy: smoke test FALLO en $HEALTH_URL (HTTP no-2xx o timeout)" >&2
+  exit 6
+}
+HEALTH_STATUS="$(printf '%s' "$HEALTH_BODY" | jq -r '.status // empty')"
+if [[ "$HEALTH_STATUS" != "ok" ]]; then
+  echo "deploy: /salud respondio HTTP OK pero status='$HEALTH_STATUS' (esperado 'ok')." >&2
+  echo "deploy: la app esta viva pero degradada; el deploy no se acepta." >&2
+  echo "deploy: body recibido: $HEALTH_BODY" >&2
   exit 6
 fi
-echo "deploy: smoke OK."
+echo "deploy: smoke OK (status=ok)."
 
-echo "==> [5/5] confirmacion final"
+echo "==> [5/5] confirmacion final: proceso vivo corre commit desplegado"
 STATE="$(systemctl show -p ActiveState --value "$SERVICE_NAME")"
 if [[ "$STATE" != "active" ]]; then
   echo "deploy: $SERVICE_NAME esta en estado '$STATE', no 'active'" >&2
   exit 7
 fi
-echo "deploy: $SERVICE_NAME activo desde $AFTER_TS, corriendo commit $TARGET_COMMIT."
+LIVE_COMMIT="$(printf '%s' "$HEALTH_BODY" | jq -r '.commit // empty')"
+if [[ -z "$LIVE_COMMIT" ]]; then
+  echo "deploy: /salud no reporta 'commit'; contrato del endpoint incumplido." >&2
+  echo "deploy: sin ese campo, no se puede validar que el proceso vivo corre '$TARGET_COMMIT'." >&2
+  exit 8
+fi
+if [[ "$LIVE_COMMIT" != "$TARGET_COMMIT" ]]; then
+  echo "deploy: el proceso vivo reporta commit '$LIVE_COMMIT'," >&2
+  echo "deploy: pero se desplego '$TARGET_COMMIT'." >&2
+  echo "deploy: systemd reinicio otra cosa (probable WorkingDirectory apuntando a otro checkout)." >&2
+  exit 9
+fi
+echo "deploy: $SERVICE_NAME activo desde $AFTER_TS, corriendo commit $TARGET_COMMIT (confirmado por /salud)."
 echo "deploy: OK."

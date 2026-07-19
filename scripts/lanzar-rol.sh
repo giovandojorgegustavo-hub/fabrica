@@ -25,6 +25,18 @@ fi
 ROL="$1"
 PROMPT_ARG="$2"
 
+# Allowlist estricta: los unicos roles validos son los 7 que declara la Fabrica.
+# Sin este check, ROL="../../etc/passwd" construye paths fuera del contrato
+# (ver docs/identidades.md).
+case "$ROL" in
+  qa|seguridad|arquitecto|producto|backend|frontend|ux) ;;
+  *)
+    echo "lanzar-rol: rol invalido: '$ROL'" >&2
+    echo "lanzar-rol: validos: qa, seguridad, arquitecto, producto, backend, frontend, ux" >&2
+    exit 2
+    ;;
+esac
+
 ROL_FILE=".claude/agents/${ROL}.md"
 if [[ ! -f "$ROL_FILE" ]]; then
   echo "lanzar-rol: no existe $ROL_FILE" >&2

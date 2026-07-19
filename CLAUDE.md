@@ -30,22 +30,36 @@
 - **Cambio estructural** (esquema, contratos entre modulos, dependencias nuevas, acoplamiento): exige revision de `arquitecto`.
 - Hallazgos criticos o altos bloquean el merge hasta ser resueltos.
 - Hallazgos medios y bajos se registran como issues en GitHub y no bloquean.
-- Si los checks estan verdes, todas las revisiones necesarias dejaron comentario firmado, y no hay bloqueantes: el merge lo hace un rol distinto del implementador.
+- Antes de mergear, quien mergea corre `scripts/verificar-firmas.sh <PR>` (mas `--con-arquitecto` / `--con-producto` si corresponde). El script valida que cada revision firmada venga de la cuenta maquina `fabrica-<rol>` real, no solo que el body diga `**Rol**: <rol>`. Sin `verificar-firmas.sh` en verde, el merge no se hace.
+- Si los checks estan verdes, `verificar-firmas.sh` pasa, todas las revisiones necesarias dejaron comentario firmado, y no hay bloqueantes: el merge lo hace un rol distinto del implementador.
 
 ## Definition of Done
 Una feature esta terminada cuando:
 1. El PR esta mergeado en main.
 2. El codigo esta **desplegado** en el ambiente vivo (proceso corriendo el commit nuevo).
-3. Esta **verificada ahi**: smoke test contra el endpoint de salud + verificacion de que el proceso vivo corre el commit nuevo (comparacion de timestamps o hash).
+3. Esta **verificada ahi**: smoke test contra el endpoint de salud + verificacion de que el proceso vivo corre el commit desplegado.
 
 Mergeado NO es desplegado. Desplegado NO es verificado. El paso obligatorio es `scripts/deploy.sh`.
+
+### Contrato del endpoint de salud
+Cada repo producto expone `/salud` (o el path que declare `HEALTH_URL`) devolviendo HTTP 200 y JSON con al menos:
+
+```json
+{ "status": "ok", "commit": "<sha completo del commit que corre el proceso vivo>" }
+```
+
+- `status`: solo `"ok"` cuenta como sano. Cualquier otro valor (`"degraded"`, `"starting"`, etc.) es app viva pero no lista, y `scripts/deploy.sh` rechaza el deploy.
+- `commit`: sha completo del commit que el proceso esta ejecutando, resuelto en tiempo de arranque (ej: variable de build o `git rev-parse HEAD` embebido). Sin este campo, `deploy.sh` no puede confirmar que el proceso vivo corre lo que se acaba de desplegar y falla.
+
+Este contrato es lo que separa "systemd reinicio algo" de "el commit desplegado esta vivo".
 
 ## E2E por UI real
 Los tests de interfaz DEBEN ejercitar la UI real (Playwright contra la app viva), nunca solo seeds de base. Un flujo que solo pasa con seeds no cuenta como cubierto.
 
 ## Operaciones como codigo
-- `scripts/deploy.sh` es el paso obligatorio del DoD. Cada repo producto lo parametriza via `scripts/deploy.env`: git pull --ff-only, migraciones si corresponde, restart del servicio declarado, smoke test contra endpoint de salud, y verificacion de que el proceso vivo corre el commit nuevo (comparacion de timestamps).
+- `scripts/deploy.sh` es el paso obligatorio del DoD. Cada repo producto lo parametriza via `scripts/deploy.env`: git pull --ff-only, migraciones si corresponde, restart del servicio declarado, smoke test que exige `status=ok` en el body de `/salud`, y confirmacion final de que el commit reportado por `/salud` coincide con el commit desplegado.
 - `scripts/lanzar-rol.sh` es el mini-lanzador de identidades: recibe rol y prompt/archivo, lanza una sesion claude con el rol y el token correspondiente. Ver `docs/identidades.md` para el layout de tokens y la configuracion de branch protection.
+- `scripts/sincronizar-desde-fabrica.sh` es el mecanismo canonico de propagacion. Fabrica publica tags semver; cada repo producto declara la version que consume en `.fabrica-version` y actualiza corriendo este script contra el tag nuevo, abriendo un PR con el diff. Detalle y racional en `docs/adr/001-sync-fabrica-a-repos-producto.md`.
 
 ## Versiones
 - Los tags de version siguen semver (vMAYOR.MENOR.PARCHE).

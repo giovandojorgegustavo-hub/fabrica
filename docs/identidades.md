@@ -57,6 +57,37 @@ En cada repo producto, `main` esta protegida con la siguiente configuracion:
 
 Esto cierra la puerta a que el implementador se autoaprueba: GitHub exige que la aprobacion venga de otra cuenta, y las cuentas revisoras son las de rol.
 
+## Verificacion tecnica de la firma (author.login)
+
+La firma textual (`**Rol**: qa`, `**Rol**: seguridad`, etc.) es solo formato. **No prueba nada por si sola**: cualquiera con `pull_request:write` puede escribir esos strings.
+
+La prueba real es que el `author.login` del comentario en la API de GitHub sea la cuenta maquina esperada:
+
+| Rol declarado en el body | `author.login` esperado |
+|--------------------------|-------------------------|
+| `qa`                     | `fabrica-qa`            |
+| `seguridad`              | `fabrica-seguridad`     |
+| `arquitecto`             | `fabrica-arquitecto`    |
+| `producto`               | `fabrica-producto`      |
+
+### Enforcement mecanico
+
+Antes de mergear cualquier PR, quien mergea corre:
+
+```
+scripts/verificar-firmas.sh <PR> [--con-arquitecto] [--con-producto]
+```
+
+El script consulta la API de GitHub via `gh`, encuentra los comentarios con marcador `**Rol**: <rol>`, y falla si:
+- Falta la revision firmada de un rol requerido.
+- Existe un comentario que dice ser de un rol pero su `author.login` NO es la cuenta maquina esperada (por ejemplo, el implementador postea un comentario disfrazado de `seguridad`: el script lo detecta como SOSPECHOSO).
+
+Sin `verificar-firmas.sh` pasando limpio, el merge no se hace. Esta regla la aplica quien mergea (rol distinto del implementador).
+
+### Cuentas maquina no pueden bypasear branch protection
+
+Ninguna cuenta maquina de rol figura en la "Bypass list" de branch protection de los repos producto. Los revisores aprueban, no bypasean. Esto se audita en la revision de `seguridad` de cualquier PR que toque configuracion del repo.
+
 ## Que hace `scripts/lanzar-rol.sh`
 
 1. Verifica que exista `.claude/agents/<rol>.md` en el repo actual.
