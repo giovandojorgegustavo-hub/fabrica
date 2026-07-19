@@ -30,6 +30,12 @@
 #
 # Dependencias: jq (para leer el JSON de salud sin regex fragil).
 #
+# Exit codes (issue #13): 2=config/deps invalidas, 3=HEALTH_URL con esquema
+# invalido, 4=timestamp de systemd ilegible, 5=el servicio no reinicio,
+# 6=smoke test fallo (status!=ok o sin respuesta), 7=servicio no-active,
+# 8=/salud sin campo commit, 9=commit vivo != commit desplegado,
+# 10=sudo -n sin permiso NOPASSWD (ver "Sudoers minimo" en docs/salud-endpoint.md).
+#
 # Falla claro y se detiene en cuanto una etapa no cumple. Cada etapa imprime
 # lo que hace, y la ultima confirma que el proceso vivo esta corriendo el
 # commit nuevo comparando el hash reportado por /salud contra el commit
@@ -70,6 +76,12 @@ source "$CONFIG"
 
 : "${SERVICE_NAME:?deploy: falta SERVICE_NAME en $CONFIG}"
 : "${HEALTH_URL:?deploy: falta HEALTH_URL en $CONFIG}"
+# Issue #13: solo http/https — un file:// o un endpoint de metadata no son
+# un healthcheck, son un vector.
+case "$HEALTH_URL" in
+  http://*|https://*) ;;
+  *) echo "deploy: HEALTH_URL debe ser http:// o https:// (recibido: $HEALTH_URL)" >&2; exit 3 ;;
+esac
 BRANCH="${BRANCH:-main}"
 MIGRATIONS_CMD="${MIGRATIONS_CMD:-}"
 
@@ -92,16 +104,28 @@ fi
 
 echo "==> [3/5] restart de $SERVICE_NAME"
 BEFORE_TS="$(systemctl show -p ActiveEnterTimestamp --value "$SERVICE_NAME" 2>/dev/null || true)"
-sudo systemctl restart "$SERVICE_NAME"
-# Espera corta para que systemd registre el nuevo timestamp.
-sleep 2
-AFTER_TS="$(systemctl show -p ActiveEnterTimestamp --value "$SERVICE_NAME")"
+# Issue #13: sudo -n — sin NOPASSWD falla claro en vez de colgarse esperando
+# password en corridas no interactivas (timer/CI).
+if ! sudo -n systemctl restart "$SERVICE_NAME"; then
+  echo "deploy: sudo -n fallo — falta la regla NOPASSWD para systemctl restart $SERVICE_NAME" >&2
+  echo "deploy: ver 'Sudoers minimo' en docs/salud-endpoint.md" >&2
+  exit 10
+fi
+# Issue #13: polling del timestamp con deadline en vez de sleep fijo — bajo
+# carga systemd puede tardar mas de 2s y el sleep magico daba falso negativo.
+RESTART_DEADLINE=$((SECONDS + 30))
+AFTER_TS="$BEFORE_TS"
+while (( SECONDS < RESTART_DEADLINE )); do
+  AFTER_TS="$(systemctl show -p ActiveEnterTimestamp --value "$SERVICE_NAME" 2>/dev/null || true)"
+  [[ -n "$AFTER_TS" && "$AFTER_TS" != "$BEFORE_TS" ]] && break
+  sleep 1
+done
 if [[ -z "$AFTER_TS" ]]; then
   echo "deploy: no pude leer ActiveEnterTimestamp de $SERVICE_NAME" >&2
   exit 4
 fi
 if [[ "$BEFORE_TS" == "$AFTER_TS" ]]; then
-  echo "deploy: ActiveEnterTimestamp NO cambio ($BEFORE_TS)." >&2
+  echo "deploy: ActiveEnterTimestamp NO cambio en 30s ($BEFORE_TS)." >&2
   echo "deploy: $SERVICE_NAME no reinicio realmente; algo se comio el restart." >&2
   exit 5
 fi
@@ -125,7 +149,9 @@ while (( SECONDS < DEADLINE )); do
 done
 if [[ "$HEALTH_STATUS" != "ok" ]]; then
   echo "deploy: smoke test FALLO — $HEALTH_URL no respondio status='ok' en ${HEALTH_DEADLINE}s." >&2
-  echo "deploy: ultimo body recibido: ${HEALTH_BODY:-<sin respuesta>}" >&2
+  # Issue #13: solo campos whitelisteados al log — un body completo podria
+  # arrastrar secrets si el endpoint degradado los filtrara.
+  echo "deploy: status='$(printf %s "${HEALTH_BODY:-}" | jq -r ".status // \"<sin respuesta>\"" 2>/dev/null)' commit='$(printf %s "${HEALTH_BODY:-}" | jq -r ".commit // \"?\"" 2>/dev/null)'" >&2
   exit 6
 fi
 echo "deploy: smoke OK (status=ok)."

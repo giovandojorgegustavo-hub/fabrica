@@ -10,3 +10,6 @@ node_modules/
 
 # Artefactos locales de herramientas
 .atl/
+
+# config productiva de deploy — jamas se commitea (issue #13)
+scripts/deploy.env
