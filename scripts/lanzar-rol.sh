@@ -107,4 +107,8 @@ export GITHUB_TOKEN
 FULL_PROMPT="$(printf '%s\n\n---\n\nPedido del usuario:\n\n%s\n' "$ROL_TEXT" "$PROMPT_TEXT")"
 
 echo "lanzar-rol: rol=$ROL token=$TOKEN_FILE" >&2
-exec claude -p "$FULL_PROMPT" "$@"
+# El separador -- es OBLIGATORIO: el prompt arranca con el frontmatter del
+# archivo de rol ("---") y sin separador el CLI lo parsea como opcion
+# (error: unknown option '---'). Encontrado en la primera corrida real del
+# vigilante — el lanzador nunca habia sido ejecutado de punta a punta.
+exec claude -p "$@" -- "$FULL_PROMPT"
