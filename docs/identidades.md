@@ -165,6 +165,34 @@ El contrato del endpoint `/salud` que cierra la Definition of Done ("desplegado 
 
 Este archivo (`identidades.md`) declara el contrato de identidades y credenciales; `salud-endpoint.md` declara el contrato del endpoint de salud. Ambos son parte del contrato general que fabrica exige a cada repo producto.
 
+## Los dos regimenes de identidad (roles revisores vs constructores)
+
+La Fabrica tiene 7 roles y TODOS se lanzan con `scripts/lanzar-rol.sh` — el lanzador es lo que convierte a un rol en un trabajador de verdad (prompt de rol + identidad + atribucion de su trabajo). Pero no todos tienen la misma identidad:
+
+| Regimen | Roles | Identidad de GitHub | Puede aprobar PRs? |
+|---------|-------|---------------------|--------------------|
+| Con cuenta maquina | `qa`, `seguridad` | su propio PAT desde `/etc/fabrica/tokens/<rol>.token` | SI — sus aprobaciones cuentan para branch protection |
+| Con identidad del operador | `backend`, `frontend`, `ux` (y `arquitecto`, `producto` hasta que sus cuentas existan) | la autenticacion de `gh` del operador | NO como rol — lo que hagan queda a nombre del operador |
+
+Por que esta asimetria es deliberada: **el candado lo sostienen los revisores**. Un constructor no necesita identidad propia para construir — necesita su prompt de rol, su contexto separado y que su trabajo quede atribuido. Darles PATs propios agrandaria la superficie de credenciales sin agregar garantia: el gate ya exige dos aprobaciones de cuentas que el constructor no tiene.
+
+`lanzar-rol.sh` resuelve el regimen solo: si existe el token del rol lo inyecta, si no, corre con la identidad del operador y lo dice en su linea de log (`identidad=operador`). Nunca falla por falta de cuenta maquina.
+
+## Atribucion del trabajo en la bitacora
+
+Cada sesion de rol queda registrada en la bitacora (via los hooks de ingesta del producto bitacora-v2). Para que el trabajo aparezca a nombre del rol que lo hizo y no de un cliente generico, `lanzar-rol.sh` exporta `BITACORA_V2_HOOK_TOKEN_FILE=/etc/bitacora-v2/hooks/<rol>.token` cuando ese archivo existe.
+
+Layout esperado (lo crea el operador, mismo criterio que los PATs):
+
+```
+/etc/bitacora-v2/hooks/qa.token
+/etc/bitacora-v2/hooks/seguridad.token
+/etc/bitacora-v2/hooks/backend.token
+...
+```
+
+Dueno `root:fiax`, permisos `640`, un token de scope `ingesta` por rol declarado en `/etc/bitacora-v2/tokens.yml`. Si el archivo del rol no existe, los hooks usan su token por defecto: el chat se ingiere igual con un empleado generico. **Nunca se pierde trazabilidad por falta de configuracion** — se pierde granularidad, que es recuperable.
+
 ## Que hace `scripts/lanzar-rol.sh`
 
 1. Verifica que exista `.claude/agents/<rol>.md` en el repo actual.
