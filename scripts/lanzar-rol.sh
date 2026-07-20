@@ -262,6 +262,12 @@ FULL_PROMPT="$(printf '%s\n\n---\n\nPedido del usuario:\n\n%s\n\n---\n\nrun_id d
 
 echo "lanzar-rol: rol=$ROL identidad=$IDENTIDAD run=$RUN_ID atribucion=${BITACORA_V2_HOOK_TOKEN_FILE:-generica}" >&2
 emitir_evento "inicio" null null ""
+# Evento reintento (ADR 002 §2): el vigilante pasa FABRICA_INTENTO cuando
+# relanza tras fallo transitorio. Se valida numerico (misma disciplina que
+# FABRICA_TRABAJO).
+if [[ "${FABRICA_INTENTO:-1}" =~ ^[0-9]+$ && "${FABRICA_INTENTO:-1}" -gt 1 ]]; then
+  emitir_evento "reintento" null null "intento ${FABRICA_INTENTO}"
+fi
 INICIO_EPOCH="$(date +%s)"
 # El separador -- es OBLIGATORIO: el prompt arranca con el frontmatter del
 # archivo de rol ("---") y sin separador el CLI lo parsea como opcion
@@ -269,9 +275,17 @@ INICIO_EPOCH="$(date +%s)"
 # vigilante — el lanzador nunca habia sido ejecutado de punta a punta.
 # Ya no usamos exec: hay que emitir el evento de cierre con el exit code
 # real de la sesion (ADR 002 §2). El exit code se propaga intacto.
+# Issue #47 (review PR#45 H2): claude corre en background con trap de
+# TERM/INT — una cancelacion (timeout del vigilante, Ctrl-C del operador)
+# mata a la sesion hija Y emite el evento de cierre; nada queda huerfano ni
+# fuera de la observabilidad.
 set +e
-claude -p "$@" -- "$FULL_PROMPT"
+claude -p "$@" -- "$FULL_PROMPT" &
+CLAUDE_PID=$!
+trap 'kill "$CLAUDE_PID" 2>/dev/null; wait "$CLAUDE_PID" 2>/dev/null; emitir_evento "fallo" "\"fallo\"" "$(( $(date +%s) - INICIO_EPOCH ))" "cancelado por senal"; exit 143' TERM INT
+wait "$CLAUDE_PID"
 RC=$?
+trap - TERM INT
 set -e
 DURACION="$(( $(date +%s) - INICIO_EPOCH ))"
 if [[ $RC -eq 0 ]]; then

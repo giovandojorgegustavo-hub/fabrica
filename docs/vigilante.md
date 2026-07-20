@@ -90,16 +90,36 @@ mitigacion del vector de prompt injection documentado en `identidades.md`:
 aunque el contenido del PR logre inyectar instrucciones, la superficie
 ejecutable de la sesion es gh y nada mas.
 
-## Estado y reintentos
+## Estado y reintentos (v3 — ADR 002)
 
 - `~/.fabrica-vigilante/lock` — flock: una pasada a la vez.
 - `~/.fabrica-vigilante/<repo>-pr<N>-<head12>-<rol>` — marker de lanzamiento:
   evita relanzar mientras la review no aparece. Un push nuevo cambia el head
   y genera marker nuevo (la review vieja queda descartada por branch
   protection y por el chequeo del vigilante).
-- `<marker>.fallo` — la sesion fallo o expiro. NO se reintenta solo: el
-  operador mira `~/.fabrica-vigilante/vigilante.log`, corrige, y borra el
-  `.fallo` para reintentar. Fallo silencioso en loop = costo sin control.
+- **Reintentos automaticos con limite**: un fallo TRANSITORIO (timeout de
+  sesion rc=124, red caida, CLI muerta — la sesion no llego a dejar su
+  review por causa externa) se reintenta solo hasta 2 veces, una por pasada
+  del timer (la cadencia de 2 min es la espera entre reintentos). El
+  contador vive en `<marker>.intentos`. Un fallo NO transitorio (exit 2/3/4
+  de lanzar-rol: argumentos, rol inexistente, token invalido) o el tercer
+  fallo marcan el trabajo `bloqueada`.
+- `<marker>.fallo` — testigo del ultimo fallo (para el log y la autopsia).
+  Ya NO frena reintentos por si solo.
+- `<marker>.bloqueada` — el gate real: requiere operador. Mirar
+  `vigilante.log`, corregir la causa, y **borrar el `.bloqueada`** para
+  rehabilitar (el contador de intentos arranca de cero — coherente con el
+  ADR: la intervencion humana resetea el historial).
+- **Labels de estado** en el issue del trabajo (resuelto del PR via
+  `closingIssuesReferences`): `estado:en-curso` al lanzar,
+  `estado:fallo-N` en reintento, `estado:bloqueada` al bloquear. El tablero
+  de Projects es solo vista: si difieren, ganan los labels.
+- **Eventos JSONL** en `~/.fabrica-vigilante/eventos.jsonl` (los emite
+  lanzar-rol): `inicio`, `reintento`, `fin`, `fallo` — con `run_id`,
+  duracion y exit code. Contrato de formato en el ADR 002; la bitacora los
+  ingiere cuando exista su tabla.
+- Contrato de entorno vigilante → lanzar-rol: `FABRICA_TRABAJO=pr<N>`,
+  `FABRICA_ISSUE=<issue>`, `FABRICA_INTENTO=<n>`.
 - `~/.fabrica-vigilante/vigilante.log` — stdout/stderr de las sesiones.
   Los tokens no aparecen ahi (lanzar-rol no los imprime).
 
@@ -109,7 +129,8 @@ ejecutable de la sesion es gh y nada mas.
 - No toca el working tree de los repos vigilados.
 - No lanza roles sin cuenta maquina (arquitecto/producto firman por
   convencion — ver tabla en `identidades.md`).
-- No reintenta fallos automaticamente (decision explicita del operador).
+- No reintenta fallos NO transitorios ni mas de 2 veces: `bloqueada` es
+  decision del operador, siempre (ADR 002 §4).
 
 ## Relacion con la bitacora
 
