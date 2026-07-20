@@ -57,6 +57,7 @@ readonly ALLOWLIST=(
   ".claude/agents/producto.md"
   "scripts/deploy.sh"
   "scripts/lanzar-rol.sh"
+  "scripts/lib-eventos.sh"
   "scripts/sincronizar-desde-fabrica.sh"
   "docs/identidades.md"
   "docs/salud-endpoint.md"

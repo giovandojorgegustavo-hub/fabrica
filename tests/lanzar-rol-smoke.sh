@@ -113,6 +113,21 @@ assert evs[-1]["evento"] == "fallo" and "senal" in evs[-1]["detalle"], evs
 EOF
 then ok; else mal "rc=$rc huerfano=$huerfano o evento de cierre ausente"; fi
 
+# --- 9. lib-eventos: evento de orquestador con run_id null (issue #59) ---
+caso "emitir_evento con run_id '-' produce run_id:null valido"
+rm -f "$EVENTOS"
+HOME="$TMP/home" bash -c '
+  source scripts/lib-eventos.sh
+  emitir_evento "-" "fabrica" "pr99" "-" "bloqueada" null null "rc=4 intento 3"
+' >/dev/null 2>&1
+if python3 - "$EVENTOS" <<'EOF'
+import json, sys
+e = json.loads(open(sys.argv[1]).readline())
+assert e["run_id"] is None, e
+assert e["evento"] == "bloqueada" and e["detalle"] == "rc=4 intento 3", e
+EOF
+then ok; else mal "run_id no es null o evento mal formado"; fi
+
 # ------------------------------------------------------------------------
 if [[ "$FALLOS" -eq 0 ]]; then
   echo "smoke: TODOS los casos OK"
