@@ -75,17 +75,27 @@ fi
 set_estado() {
   local slug="$1" issue="$2" nuevo="$3"
   [[ -z "$issue" ]] && return 0
-  gh label create "estado:$nuevo" -R "$slug" --color BFD4F2 \
-    --description "Estado de orquestacion (ADR 002)" --force >/dev/null 2>&1 || true
   local actuales args=()
   actuales="$(gh issue view "$issue" -R "$slug" --json labels \
     --jq '[.labels[].name | select(startswith("estado:"))] | join(" ")' 2>/dev/null || true)"
+  # Idempotencia (issue #58): si el estado ya es el pedido, no tocar la API —
+  # este helper corre en cada pasada del timer y el churn seria constante.
+  [[ "$actuales" == "estado:$nuevo" ]] && return 0
+  gh label create "estado:$nuevo" -R "$slug" --color BFD4F2 \
+    --description "Estado de orquestacion (ADR 002)" --force >/dev/null 2>&1 || true
   local l
   for l in $actuales; do
     [[ "$l" != "estado:$nuevo" ]] && args+=(--remove-label "$l")
   done
   gh issue edit "$issue" -R "$slug" "${args[@]}" --add-label "estado:$nuevo" >/dev/null 2>&1 \
     || echo "vigilante: no pude setear estado:$nuevo en $slug#$issue (no bloquea)" >&2
+}
+
+# Edad en segundos de un archivo (mtime). Linux primero (server), macOS fallback.
+edad_segundos() {
+  local m
+  m="$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0)"
+  printf '%s' "$(( $(date +%s) - m ))"
 }
 
 # Clasificacion de fallos (ADR 002 §4): transitorio = la sesion no llego a
@@ -115,6 +125,20 @@ while IFS= read -r repo_path; do
   fi
 
   cd "$repo_path"
+
+  # Issue #42: el comportamiento del circuito no puede depender de la rama en
+  # que quedo parado el checkout — una rama de trabajo puede tener un lanzador
+  # viejo (o uno NUEVO sin revisar) y ejecutarlo en silencio. Politica minima
+  # y fail-safe (opcion 2 del issue): solo se opera desde main; si el checkout
+  # quedo en otra rama, se salta el repo con aviso fuerte. La opcion 3
+  # (ejecutar git show main:scripts/... siempre) queda documentada en el issue
+  # como evolucion si esta guarda resulta molesta en la operacion real.
+  rama_actual="$(git symbolic-ref --short HEAD 2>/dev/null || echo DETACHED)"
+  if [[ "$rama_actual" != "main" ]]; then
+    echo "vigilante: $repo_path esta parado en '$rama_actual' (no main) — SALTO el repo entero. El lanzador y los roles ejecutarian una version no mergeada (issue #42). Volver a main: git -C $repo_path switch main" >&2
+    continue
+  fi
+
   slug="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
 
   while IFS=$'\t' read -r pr_num head_sha is_draft; do
@@ -127,8 +151,14 @@ while IFS= read -r repo_path; do
     issue_num="$(gh pr view "$pr_num" --repo "$slug" --json closingIssuesReferences \
       --jq '.closingIssuesReferences[0].number // empty' 2>/dev/null || true)"
 
+    # Issue #58: contar cuantos roles obligatorios AUN no dejaron review sobre
+    # el head actual. Si al final es cero, el trabajo espera al operador.
+    faltan_reviews=0
+
     for rol in "${ROLES[@]}"; do
       cuenta="${CUENTAS[$rol]}"
+      marker="$STATE_DIR/$(printf '%s' "$slug" | tr '/' '_')-pr${pr_num}-${head_sha:0:12}-${rol}"
+      intentos_file="$marker.intentos"
 
       # Ya hay review de la cuenta maquina sobre el head ACTUAL? (las reviews
       # sobre heads viejos no cuentan: branch protection las descarta y este
@@ -136,19 +166,51 @@ while IFS= read -r repo_path; do
       if gh api "repos/$slug/pulls/$pr_num/reviews" --paginate \
            --jq ".[] | select(.user.login==\"$cuenta\" and .commit_id==\"$head_sha\") | .id" \
            | grep -q .; then
+        # Issue #57: la review EXISTE — si quedaron rastros de fallos previos
+        # (la sesion publico la review y murio despues, ej. timeout esperando
+        # cierre), la maquina de estados estaria mintiendo con fallo-N. Se
+        # limpian los rastros locales y el label vuelve a en-curso (el check
+        # de #58 lo sube a esperando-dueno si ya no falta nadie).
+        if [[ -f "$intentos_file" || -e "$marker.fallo" ]]; then
+          rm -f "$intentos_file" "$marker.fallo"
+          set_estado "$slug" "$issue_num" "en-curso"
+          echo "vigilante: $rol para $slug#$pr_num tenia rastros de fallo pero la review EXISTE — rastros limpiados (issue #57)."
+        fi
         continue
       fi
 
-      marker="$STATE_DIR/$(printf '%s' "$slug" | tr '/' '_')-pr${pr_num}-${head_sha:0:12}-${rol}"
-      # .bloqueada = requiere operador (borrarlo rehabilita). El marker pelado
-      # = sesion en curso o terminada sobre este head. El .fallo ya NO frena
-      # por si solo (ADR 002 §4): es testigo; el gate es .bloqueada.
-      if [[ -e "$marker" || -e "$marker.bloqueada" ]]; then
+      faltan_reviews=$((faltan_reviews + 1))
+
+      # .bloqueada = requiere operador (borrarlo rehabilita).
+      if [[ -e "$marker.bloqueada" ]]; then
+        continue
+      fi
+
+      # Issue #56 (lease): un marker pelado significa "sesion en curso" — pero
+      # si el vigilante murio DURO (kill -9, reboot, OOM) el trap de lanzar-rol
+      # nunca corrio y el marker quedaria pelado para siempre, congelando el
+      # trabajo en silencio. El marker se trata como lease con vencimiento:
+      # mas viejo que TIMEOUT_SESION + margen y SIN review (ya lo sabemos aca)
+      # = huerfano -> entra al circuito de reintentos del ADR 002 §4.
+      if [[ -e "$marker" ]]; then
+        if (( $(edad_segundos "$marker") > TIMEOUT_SESION + 120 )); then
+          mv -f "$marker" "$marker.fallo"
+          intento_muerto=1
+          [[ -f "$intentos_file" ]] && intento_muerto=$(( $(cat "$intentos_file") + 1 ))
+          if (( intento_muerto >= 3 )); then
+            : > "$marker.bloqueada"
+            set_estado "$slug" "$issue_num" "bloqueada"
+            echo "vigilante: $rol para $slug#$pr_num HUERFANO (marker vencido, intento $intento_muerto) — BLOQUEADA; resolver y borrar $marker.bloqueada." >&2
+          else
+            printf '%s' "$intento_muerto" > "$intentos_file"
+            set_estado "$slug" "$issue_num" "fallo-$intento_muerto"
+            echo "vigilante: $rol para $slug#$pr_num HUERFANO (marker vencido, muerte dura?) — reintenta la proxima pasada (intento $intento_muerto/2 usado, issue #56)." >&2
+          fi
+        fi
         continue
       fi
 
       # Numero de intento (1 = primero; >1 = reintento tras fallo transitorio).
-      intentos_file="$marker.intentos"
       intento=1
       if [[ -f "$intentos_file" ]]; then
         intento=$(( $(cat "$intentos_file") + 1 ))
@@ -203,6 +265,15 @@ Pasos:
         fi
       fi
     done
+
+    # Issue #58: todas las reviews obligatorias estan sobre el head actual —
+    # el trabajo ya no espera a ninguna maquina: espera AL OPERADOR. Estado
+    # explicito para poder medir el cuello del dueño (diferencia entre este
+    # timestamp y el cierre del issue). set_estado es idempotente: si ya
+    # esta, no toca la API.
+    if [[ "$faltan_reviews" -eq 0 ]]; then
+      set_estado "$slug" "$issue_num" "esperando-dueno"
+    fi
   done < <(gh pr list --state open --json number,headRefOid,isDraft \
              --jq '.[] | [.number, .headRefOid, .isDraft] | @tsv')
 done < "$CONFIG"
