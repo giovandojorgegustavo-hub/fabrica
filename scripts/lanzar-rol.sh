@@ -84,6 +84,28 @@ ROL_TEXT="$(cat "$ROL_FILE")"
 #       mientras sus cuentas no existan: construyen y firman por convencion,
 #       pero NO pueden emitir aprobaciones que el candado cuente. Esa
 #       asimetria es deliberada: el gate lo sostienen los revisores.
+# Issue #38 (hallazgo A1 de qa en app-erp#8): los roles REVISORES con cuenta
+# maquina declarada en la tabla de docs/identidades.md EXIGEN su token. Sin
+# token NO se degrada al operador: se aborta. La caida silenciosa publicaria
+# reviews con body \"**Rol**: qa\" desde la cuenta del operador — el gate de
+# separacion de identidad que sostiene el circuito.
+case "$ROL" in
+  qa|seguridad)
+    if [[ ! -e "$TOKEN_FILE" ]]; then
+      echo "lanzar-rol: el rol '$ROL' EXIGE cuenta maquina propia (tabla de docs/identidades.md)." >&2
+      echo "lanzar-rol: no existe $TOKEN_FILE — no se degrada al operador. Abortando." >&2
+      exit 4
+    fi
+    ;;
+esac
+
+# Issue #38 (hallazgo M1): [[ -e ]] sigue symlinks, asi que un symlink roto
+# (rotacion a medias) tambien degradaria silenciosamente al operador.
+if [[ -L "$TOKEN_FILE" && ! -e "$TOKEN_FILE" ]]; then
+  echo "lanzar-rol: $TOKEN_FILE es un symlink roto (rotacion a medias?). Abortando." >&2
+  exit 4
+fi
+
 IDENTIDAD="operador"
 if [[ -e "$TOKEN_FILE" ]]; then
   # Issue #14: el token debe ser un ARCHIVO REGULAR, no symlink ni FIFO ni
