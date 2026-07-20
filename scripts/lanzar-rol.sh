@@ -198,6 +198,25 @@ json_str() {
   printf '%s' "$s"
 }
 
+# Milisegundos desde epoch (issue #49: corridas <1s reportaban duracion 0).
+# EPOCHREALTIME es bash 5+; fallback a segundos*1000 donde no exista.
+ms_ahora() {
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then
+    local s="${EPOCHREALTIME%%.*}" f="${EPOCHREALTIME#*.}"
+    printf '%s' "$(( s * 1000 + 10#${f:0:3} ))"
+  else
+    printf '%s' "$(( $(date +%s) * 1000 ))"
+  fi
+}
+
+# Duracion en segundos con 3 decimales (numero JSON valido) a partir de ms.
+duracion_s_desde() {
+  local ini_ms="$1" fin_ms
+  fin_ms="$(ms_ahora)"
+  local d=$(( fin_ms - ini_ms ))
+  printf '%d.%03d' "$(( d / 1000 ))" "$(( d % 1000 ))"
+}
+
 # Emite UNA linea JSONL. Nunca bloquea la corrida: si el archivo no se puede
 # escribir, loguea a stderr y sigue (ADR 002 §2 — la observabilidad no frena
 # la produccion). flock + linea max 4 KiB garantizan appends atomicos; si
@@ -246,12 +265,24 @@ if [[ -n "${FABRICA_ISSUE:-}" ]]; then
   case "$ROL" in
     qa)        CUENTA_ROL="qa-fabrica-gg" ;;
     seguridad) CUENTA_ROL="seguridad-fabrica-gg" ;;
-    *)         CUENTA_ROL="" ;;
+    *)
+      # Issue #48: aviso EXPLICITO para roles sin cuenta mapeada — si la
+      # tabla de identidades.md suma una cuenta nueva, este mensaje delata
+      # que falta actualizar el case (no cae en silencio).
+      CUENTA_ROL=""
+      echo "lanzar-rol: rol '$ROL' sin cuenta maquina en el mapeo local — no se asigna assignee (si la tabla de docs/identidades.md cambio, actualizar este case)." >&2
+      ;;
   esac
   if [[ -n "$CUENTA_ROL" ]]; then
+    # Issue #52: repo EXPLICITO — sin -R, gh infiere del cwd y un lanzamiento
+    # desde otro directorio tocaria el repo equivocado. Si el slug no se
+    # puede resolver, mejor no asignar que asignar a ciegas.
+    SLUG_ISSUE="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || true)"
+    if [[ -z "$SLUG_ISSUE" ]]; then
+      echo "lanzar-rol: no pude resolver el slug del repo — no se asigna assignee (no bloquea)." >&2
     # Review PR#45 r2 H-M3: la CAUSA del fallo queda visible en stderr (el
     # PAT del rol puede no tener issues:write y hay que poder verlo).
-    if ! salida_gh="$(gh issue edit "$FABRICA_ISSUE" --add-assignee "$CUENTA_ROL" 2>&1 >/dev/null)"; then
+    elif ! salida_gh="$(gh issue edit "$FABRICA_ISSUE" -R "$SLUG_ISSUE" --add-assignee "$CUENTA_ROL" 2>&1 >/dev/null)"; then
       echo "lanzar-rol: no pude asignar #$FABRICA_ISSUE a $CUENTA_ROL (no bloquea): ${salida_gh:0:200}" >&2
     fi
   fi
@@ -268,7 +299,7 @@ emitir_evento "inicio" null null ""
 if [[ "${FABRICA_INTENTO:-1}" =~ ^[0-9]+$ && "${FABRICA_INTENTO:-1}" -gt 1 ]]; then
   emitir_evento "reintento" null null "intento ${FABRICA_INTENTO}"
 fi
-INICIO_EPOCH="$(date +%s)"
+INICIO_MS="$(ms_ahora)"
 # El separador -- es OBLIGATORIO: el prompt arranca con el frontmatter del
 # archivo de rol ("---") y sin separador el CLI lo parsea como opcion
 # (error: unknown option '---'). Encontrado en la primera corrida real del
@@ -282,12 +313,12 @@ INICIO_EPOCH="$(date +%s)"
 set +e
 claude -p "$@" -- "$FULL_PROMPT" &
 CLAUDE_PID=$!
-trap 'kill "$CLAUDE_PID" 2>/dev/null; wait "$CLAUDE_PID" 2>/dev/null; emitir_evento "fallo" "\"fallo\"" "$(( $(date +%s) - INICIO_EPOCH ))" "cancelado por senal"; exit 143' TERM INT
+trap 'kill "$CLAUDE_PID" 2>/dev/null; wait "$CLAUDE_PID" 2>/dev/null; emitir_evento "fallo" "\"fallo\"" "$(duracion_s_desde "$INICIO_MS")" "cancelado por senal"; exit 143' TERM INT
 wait "$CLAUDE_PID"
 RC=$?
 trap - TERM INT
 set -e
-DURACION="$(( $(date +%s) - INICIO_EPOCH ))"
+DURACION="$(duracion_s_desde "$INICIO_MS")"
 if [[ $RC -eq 0 ]]; then
   emitir_evento "fin" '"ok"' "$DURACION" ""
 else

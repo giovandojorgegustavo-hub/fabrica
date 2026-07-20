@@ -207,4 +207,11 @@ Pasos:
              --jq '.[] | [.number, .headRefOid, .isDraft] | @tsv')
 done < "$CONFIG"
 
+# Issue #54: si lanzar-rol aviso que omitio eventos (flock ausente en Linux),
+# la observabilidad esta muda y nadie lo sabria — el aviso vive enterrado en
+# el log de sesiones. Se delata en la salida del vigilante (journalctl).
+if tail -n 200 "$LOG_FILE" 2>/dev/null | grep -q "evento OMITIDO"; then
+  echo "vigilante: ATENCION — hay eventos OMITIDOS recientes en $LOG_FILE (flock ausente?): la observabilidad esta muda. Instalar util-linux." >&2
+fi
+
 echo "vigilante: pasada completa ($lanzados sesion(es) lanzada(s))."
