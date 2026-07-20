@@ -106,6 +106,32 @@ if [[ -L "$TOKEN_FILE" && ! -e "$TOKEN_FILE" ]]; then
   exit 4
 fi
 
+# Hallazgo ALTO de la revision de seguridad (bitacora-v2#8): la caida a
+# identidad del operador NO puede aplicar a los revisores. Si qa o seguridad
+# corrieran sin su cuenta maquina, publicarian aprobaciones desde la cuenta
+# del operador — el candado quedaria en inspeccion visual justo donde el
+# producto se rehusa a depender de honor-system. Para ellos: fail-close.
+case "$ROL" in
+  qa|seguridad) REQUIERE_CUENTA_MAQUINA=1 ;;
+  *)            REQUIERE_CUENTA_MAQUINA=0 ;;
+esac
+
+if [[ ! -e "$TOKEN_FILE" ]]; then
+  if [[ "$REQUIERE_CUENTA_MAQUINA" == "1" ]]; then
+    echo "lanzar-rol: el rol '$ROL' EXIGE su cuenta maquina y falta $TOKEN_FILE." >&2
+    echo "lanzar-rol: un revisor sin identidad propia aprobaria como el operador. No arranco." >&2
+    echo "lanzar-rol: ver 'Los dos regimenes de identidad' en docs/identidades.md." >&2
+    exit 4
+  fi
+  case "$ROL" in
+    arquitecto|producto)
+      # Caida EXPLICITA mientras sus cuentas no existan (no silenciosa).
+      echo "lanzar-rol: AVISO — '$ROL' corre con identidad del operador porque su cuenta maquina todavia no existe." >&2
+      echo "lanzar-rol: sus firmas valen por convencion; NO cuentan para branch protection." >&2
+      ;;
+  esac
+fi
+
 IDENTIDAD="operador"
 if [[ -e "$TOKEN_FILE" ]]; then
   # Issue #14: el token debe ser un ARCHIVO REGULAR, no symlink ni FIFO ni

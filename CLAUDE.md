@@ -17,6 +17,7 @@
 ## Roles
 - Los archivos de rol viven en `.claude/agents/`: backend, frontend, ux, qa, seguridad, arquitecto, producto.
 - Un rol solo actua si esta invocado explicitamente. No hay revision "implicita".
+- Un rol puede delegar en sub-agentes si el trabajo lo amerita, pero **responde por el resultado**: su respuesta final es el entregable o su resumen sustantivo, jamas un aviso de que delego. La sesion del rol es lo que queda registrado; una traza vacia con un costo al lado no es trazabilidad.
 - **Prohibicion dura: quien implementa un PR NO puede ejecutar ni redactar sus propias revisiones qa o seguridad.** Cada revision es una sesion separada del implementador.
 - Cada revision (qa, seguridad, arquitecto, producto) deja **comentario firmado** en el PR con: nombre del rol, timestamp, hash del commit revisado, y veredicto. **Sin comentario en el PR, la revision no existio.**
 
