@@ -1,7 +1,17 @@
 # ADR 002: Observabilidad y orquestacion v3
 
-- **Estado**: propuesto (rev 2)
+- **Estado**: aceptado (rev 3)
 - **Fecha**: 2026-07-20
+- **Rev 3 (2026-07-20)**: issue #59 — eventos del ORQUESTADOR. El enum de
+  eventos se extiende con `bloqueada`, `reintento-programado` y
+  `esperando-dueno`, emitidos por el vigilante con `run_id: null` (no hay
+  sesion detras de una decision de orquestacion). El emisor se extrae a
+  `scripts/lib-eventos.sh`, unica fuente de verdad del formato (regla #46
+  aplicada al propio codigo). `salteo` se evaluo y se DESCARTA: emitirlo en
+  cada pasada para cada review ya existente seria ruido por diseño (miles de
+  lineas sin informacion nueva); las causas de salteo son reconstruibles.
+  Momento elegido a proposito: ANTES de que exista la ingesta de bitacora —
+  el contrato se cambia gratis cuando nadie lo consume todavia.
 - **Rev 2 (2026-07-20)**: incorpora la revision qa del PR #44 — H1 (alto:
   definicion explicita de fallo transitorio), H2 (mapeo PR→issue), H3/H4
   (concurrencia y limites del JSONL), H5 (timestamps), H6 (precondicion
@@ -82,6 +92,14 @@ Reglas:
 - `evento:inicio` al lanzar; `evento:fin` con `resultado` y `duracion_s` al
   terminar; `evento:fallo` con `detalle` del error; `evento:reintento` con el
   numero de intento.
+- **Eventos del orquestador (rev 3, issue #59)**: el vigilante emite ademas
+  `evento:bloqueada` (con rc, intento y causa en `detalle`),
+  `evento:reintento-programado` (rc e intento) y `evento:esperando-dueno`
+  (solo en la TRANSICION, no en cada pasada). En estos eventos `run_id` es
+  `null` — una decision de orquestacion no tiene sesion detras; la clave de
+  correlacion es (repo, trabajo, rol). El formato de linea es identico y lo
+  produce el MISMO emisor: `scripts/lib-eventos.sh`, sourceado por
+  lanzar-rol y por el vigilante — una sola fuente de verdad del contrato.
 - Campos de costo/duracion: best effort — si la sesion no los reporta, `null`.
   Nunca bloquean la corrida.
 - **Concurrencia (H3)**: todo append se hace bajo `flock` sobre

@@ -57,6 +57,16 @@ TIMEOUT_SESION="${TIMEOUT_SESION:-1800}"
 
 mkdir -p "$STATE_DIR"
 
+# Emisor comun de eventos (issue #59 / regla #46): el vigilante emite sus
+# decisiones de orquestacion al MISMO eventos.jsonl, con el MISMO formato,
+# usando la MISMA lib que lanzar-rol. run_id "-" => null: una decision del
+# orquestador no tiene sesion detras. Se sourcea desde la carpeta del script.
+# shellcheck source=scripts/lib-eventos.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/lib-eventos.sh"
+
+# emitir_orq <repo> <trabajo> <rol> <evento> <detalle>  (run_id null, sin duracion)
+emitir_orq() { emitir_evento "-" "$1" "$2" "$3" "$4" null null "$5"; }
+
 # Una sola corrida a la vez.
 exec 9>"$STATE_DIR/lock"
 if ! flock -n 9; then
@@ -89,6 +99,15 @@ set_estado() {
   done
   gh issue edit "$issue" -R "$slug" "${args[@]}" --add-label "estado:$nuevo" >/dev/null 2>&1 \
     || echo "vigilante: no pude setear estado:$nuevo en $slug#$issue (no bloquea)" >&2
+}
+
+# Estado actual estado:* de un issue (vacio si ninguno). Para detectar la
+# TRANSICION a esperando-dueno y emitir su evento una sola vez (issue #59).
+estado_actual() {
+  local slug="$1" issue="$2"
+  [[ -z "$issue" ]] && { printf ''; return 0; }
+  gh issue view "$issue" -R "$slug" --json labels \
+    --jq 'first(.labels[].name | select(startswith("estado:"))) // ""' 2>/dev/null || printf ''
 }
 
 # Edad en segundos de un archivo (mtime). Linux primero (server), macOS fallback.
@@ -200,10 +219,12 @@ while IFS= read -r repo_path; do
           if (( intento_muerto >= 3 )); then
             : > "$marker.bloqueada"
             set_estado "$slug" "$issue_num" "bloqueada"
+            emitir_orq "$slug" "pr${pr_num}" "$rol" "bloqueada" "huerfano marker vencido, intento $intento_muerto"
             echo "vigilante: $rol para $slug#$pr_num HUERFANO (marker vencido, intento $intento_muerto) — BLOQUEADA; resolver y borrar $marker.bloqueada." >&2
           else
             printf '%s' "$intento_muerto" > "$intentos_file"
             set_estado "$slug" "$issue_num" "fallo-$intento_muerto"
+            emitir_orq "$slug" "pr${pr_num}" "$rol" "reintento-programado" "huerfano marker vencido, intento $intento_muerto"
             echo "vigilante: $rol para $slug#$pr_num HUERFANO (marker vencido, muerte dura?) — reintenta la proxima pasada (intento $intento_muerto/2 usado, issue #56)." >&2
           fi
         fi
@@ -256,11 +277,13 @@ Pasos:
           # timer ES la espera entre reintentos (ADR 002 §4).
           printf '%s' "$intento" > "$intentos_file"
           set_estado "$slug" "$issue_num" "fallo-$intento"
+          emitir_orq "$slug" "pr${pr_num}" "$rol" "reintento-programado" "rc=$rc transitorio, intento $intento/2 usado"
           echo "vigilante: sesion $rol para $slug#$pr_num FALLO (rc=$rc, transitorio, intento $intento/2 usado; reintenta la proxima pasada)." >&2
         else
           # Fallo NO transitorio, o tercer fallo: requiere operador.
           : > "$marker.bloqueada"
           set_estado "$slug" "$issue_num" "bloqueada"
+          emitir_orq "$slug" "pr${pr_num}" "$rol" "bloqueada" "rc=$rc intento $intento"
           echo "vigilante: sesion $rol para $slug#$pr_num BLOQUEADA (rc=$rc, intento $intento; ver $LOG_FILE; resolver y borrar $marker.bloqueada para rehabilitar)." >&2
         fi
       fi
@@ -271,8 +294,13 @@ Pasos:
     # explicito para poder medir el cuello del dueño (diferencia entre este
     # timestamp y el cierre del issue). set_estado es idempotente: si ya
     # esta, no toca la API.
-    if [[ "$faltan_reviews" -eq 0 ]]; then
-      set_estado "$slug" "$issue_num" "esperando-dueno"
+    if [[ "$faltan_reviews" -eq 0 && -n "$issue_num" ]]; then
+      # Emitir el evento SOLO en la transicion (issue #59): si el estado ya
+      # era esperando-dueno, no re-emitir en cada pasada del timer.
+      if [[ "$(estado_actual "$slug" "$issue_num")" != "estado:esperando-dueno" ]]; then
+        set_estado "$slug" "$issue_num" "esperando-dueno"
+        emitir_orq "$slug" "pr${pr_num}" "-" "esperando-dueno" "todas las reviews sobre el head actual"
+      fi
     fi
   done < <(gh pr list --state open --json number,headRefOid,isDraft \
              --jq '.[] | [.number, .headRefOid, .isDraft] | @tsv')

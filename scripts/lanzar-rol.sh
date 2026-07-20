@@ -155,9 +155,12 @@ fi
 # run_id: <UTC compacto>-<repo>-<trabajo>-<rol>-<sufijo>. El timestamp del
 # run_id usa ISO8601 BASICO (seguro para filenames); el ts de los eventos usa
 # ISO8601 EXTENDIDO. Ambas formas son el mismo reloj UTC (ADR 002 §1).
-EVENTOS_DIR="${HOME}/.fabrica-vigilante"
-EVENTOS_FILE="${EVENTOS_DIR}/eventos.jsonl"
-EVENTOS_LOCK="${EVENTOS_DIR}/eventos.lock"
+# El emisor de eventos y json_str viven en lib-eventos.sh — una sola fuente
+# de verdad del formato, referenciada aca y por el vigilante (issue #59 /
+# regla #46). Este script vive junto a la lib (misma carpeta scripts/).
+# shellcheck source=scripts/lib-eventos.sh
+source "$(dirname "$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")")/lib-eventos.sh"
+
 REPO_NOMBRE="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
 TRABAJO="${FABRICA_TRABAJO:-manual}"
 # Review PR#45 H1: los componentes del run_id (y de la linea JSONL) se
@@ -182,21 +185,6 @@ REPO_NOMBRE="${REPO_NOMBRE//[^A-Za-z0-9._-]/-}"
 REPO_NOMBRE="${REPO_NOMBRE:0:64}"
 SUFIJO="$(openssl rand -hex 2 2>/dev/null || printf '%04x' "$((RANDOM % 65536))")"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${REPO_NOMBRE}-${TRABAJO}-${ROL}-${SUFIJO}"
-mkdir -p "$EVENTOS_DIR" 2>/dev/null || true
-
-# Escapado JSON minimo para TODO string interpolado en la linea de eventos
-# (review PR#45 H1: no solo detalle — defensa en profundidad aunque los
-# inputs ya esten validados).
-json_str() {
-  local s="$1"
-  s="${s//\\/\\\\}"
-  s="${s//\"/\\\"}"
-  s="${s//$'\n'/ | }"
-  # Review PR#45 r2 H-B2: RFC 8259 exige escapar TODO control char. Los que
-  # no tienen representacion legible se eliminan directamente.
-  s="${s//[[:cntrl:]]/}"
-  printf '%s' "$s"
-}
 
 # Milisegundos desde epoch (issue #49: corridas <1s reportaban duracion 0).
 # EPOCHREALTIME es bash 5+; fallback a segundos*1000 donde no exista.
@@ -217,43 +205,10 @@ duracion_s_desde() {
   printf '%d.%03d' "$(( d / 1000 ))" "$(( d % 1000 ))"
 }
 
-# Emite UNA linea JSONL. Nunca bloquea la corrida: si el archivo no se puede
-# escribir, loguea a stderr y sigue (ADR 002 §2 — la observabilidad no frena
-# la produccion). flock + linea max 4 KiB garantizan appends atomicos; si
-# flock no existe (macOS del operador), append directo con aviso.
-emitir_evento() {
-  local evento="$1" resultado="$2" duracion="$3" detalle="$4"
-  # detalle: truncado a 1 KiB ANTES de escapar (review PR#45 r2 H-M2: truncar
-  # despues puede cortar un escape \" por la mitad y dejar un \ huerfano que
-  # invalida el JSON). El escapado puede crecer el string, pero acotado y muy
-  # por debajo del cap de linea. El resto de los strings tambien pasa por
-  # json_str (review PR#45 H1).
-  detalle="${detalle:0:1024}"
-  detalle="$(json_str "$detalle")"
-  local linea
-  linea="$(printf '{"ts":"%s","run_id":"%s","repo":"%s","trabajo":"%s","rol":"%s","evento":"%s","resultado":%s,"duracion_s":%s,"costo_usd":null,"detalle":"%s"}' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_str "$RUN_ID")" "$(json_str "$REPO_NOMBRE")" \
-    "$(json_str "$TRABAJO")" "$(json_str "$ROL")" "$(json_str "$evento")" \
-    "$resultado" "$duracion" "$detalle")"
-  linea="${linea:0:4096}"
-  # Concurrencia (ADR 002 §2 + review PR#45 H4 y r2 H-A1): el lock se toma
-  # sobre EVENTOS_LOCK — el archivo de lock SEPARADO que fija el ADR — y se
-  # escribe a EVENTOS_FILE dentro del bloque locked. TODO emisor futuro (el
-  # vigilante en PR 2 incluido) debe lockear ESTE MISMO archivo; lockear el
-  # jsonl directo seria otro inode y no sincronizaria. En Linux (ambiente
-  # del vigilante, roles en paralelo) flock es OBLIGATORIO — si falta, se
-  # omite la emision con aviso (nunca JSONL intercalado corrupto, y la
-  # corrida no se bloquea). El append directo queda solo para la maquina
-  # del operador (macOS), donde no hay paralelismo real.
-  if command -v flock >/dev/null 2>&1; then
-    ( flock 9; printf '%s\n' "$linea" >> "$EVENTOS_FILE" ) 9>>"$EVENTOS_LOCK" 2>/dev/null \
-      || echo "lanzar-rol: no pude emitir evento a $EVENTOS_FILE (no bloquea)" >&2
-  elif [[ "$(uname)" == "Linux" ]]; then
-    echo "lanzar-rol: flock no disponible en Linux — evento OMITIDO (instalar util-linux)." >&2
-  else
-    printf '%s\n' "$linea" >> "$EVENTOS_FILE" 2>/dev/null \
-      || echo "lanzar-rol: no pude emitir evento a $EVENTOS_FILE (no bloquea)" >&2
-  fi
+# Envoltorio: los eventos de este rol siempre llevan run_id, repo, trabajo y
+# rol de esta corrida. La firma completa vive en lib-eventos.sh.
+emitir() {  # emitir <evento> <resultado_json> <duracion_json> <detalle>
+  emitir_evento "$RUN_ID" "$REPO_NOMBRE" "$TRABAJO" "$ROL" "$1" "$2" "$3" "$4"
 }
 
 # ADR 002 §5: al tomar un trabajo, asignar el issue a la cuenta maquina del
@@ -292,12 +247,12 @@ FULL_PROMPT="$(printf '%s\n\n---\n\nPedido del usuario:\n\n%s\n\n---\n\nrun_id d
   "$ROL_TEXT" "$PROMPT_TEXT" "$RUN_ID" "$RUN_ID")"
 
 echo "lanzar-rol: rol=$ROL identidad=$IDENTIDAD run=$RUN_ID atribucion=${BITACORA_V2_HOOK_TOKEN_FILE:-generica}" >&2
-emitir_evento "inicio" null null ""
+emitir "inicio" null null ""
 # Evento reintento (ADR 002 §2): el vigilante pasa FABRICA_INTENTO cuando
 # relanza tras fallo transitorio. Se valida numerico (misma disciplina que
 # FABRICA_TRABAJO).
 if [[ "${FABRICA_INTENTO:-1}" =~ ^[0-9]+$ && "${FABRICA_INTENTO:-1}" -gt 1 ]]; then
-  emitir_evento "reintento" null null "intento ${FABRICA_INTENTO}"
+  emitir "reintento" null null "intento ${FABRICA_INTENTO}"
 fi
 INICIO_MS="$(ms_ahora)"
 # El separador -- es OBLIGATORIO: el prompt arranca con el frontmatter del
@@ -313,15 +268,15 @@ INICIO_MS="$(ms_ahora)"
 set +e
 claude -p "$@" -- "$FULL_PROMPT" &
 CLAUDE_PID=$!
-trap 'kill "$CLAUDE_PID" 2>/dev/null; wait "$CLAUDE_PID" 2>/dev/null; emitir_evento "fallo" "\"fallo\"" "$(duracion_s_desde "$INICIO_MS")" "cancelado por senal"; exit 143' TERM INT
+trap 'kill "$CLAUDE_PID" 2>/dev/null; wait "$CLAUDE_PID" 2>/dev/null; emitir "fallo" "\"fallo\"" "$(duracion_s_desde "$INICIO_MS")" "cancelado por senal"; exit 143' TERM INT
 wait "$CLAUDE_PID"
 RC=$?
 trap - TERM INT
 set -e
 DURACION="$(duracion_s_desde "$INICIO_MS")"
 if [[ $RC -eq 0 ]]; then
-  emitir_evento "fin" '"ok"' "$DURACION" ""
+  emitir "fin" '"ok"' "$DURACION" ""
 else
-  emitir_evento "fallo" '"fallo"' "$DURACION" "claude exit=$RC"
+  emitir "fallo" '"fallo"' "$DURACION" "claude exit=$RC"
 fi
 exit "$RC"
