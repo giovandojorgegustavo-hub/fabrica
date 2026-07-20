@@ -157,11 +157,33 @@ fi
 # ISO8601 EXTENDIDO. Ambas formas son el mismo reloj UTC (ADR 002 §1).
 EVENTOS_DIR="${HOME}/.fabrica-vigilante"
 EVENTOS_FILE="${EVENTOS_DIR}/eventos.jsonl"
-EVENTOS_LOCK="${EVENTOS_DIR}/eventos.lock"
 REPO_NOMBRE="$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")"
 TRABAJO="${FABRICA_TRABAJO:-manual}"
+# Review PR#45 H1: los componentes del run_id (y de la linea JSONL) se
+# validan/sanitizan ANTES de interpolar — un env malicioso o un path con
+# comillas no puede fabricar campos JSON. TRABAJO viene de afuera: se valida
+# y se aborta claro. REPO_NOMBRE viene del filesystem: se sanitiza
+# deterministicamente. ROL ya paso por la allowlist de arriba.
+if [[ ! "$TRABAJO" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "lanzar-rol: FABRICA_TRABAJO invalido ('$TRABAJO'): solo [A-Za-z0-9._-]." >&2
+  exit 2
+fi
+REPO_NOMBRE="${REPO_NOMBRE//[^A-Za-z0-9._-]/-}"
 SUFIJO="$(openssl rand -hex 2 2>/dev/null || printf '%04x' "$((RANDOM % 65536))")"
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${REPO_NOMBRE}-${TRABAJO}-${ROL}-${SUFIJO}"
+mkdir -p "$EVENTOS_DIR" 2>/dev/null || true
+
+# Escapado JSON minimo para TODO string interpolado en la linea de eventos
+# (review PR#45 H1: no solo detalle — defensa en profundidad aunque los
+# inputs ya esten validados).
+json_str() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/ | }"
+  s="${s//$'\t'/ }"
+  printf '%s' "$s"
+}
 
 # Emite UNA linea JSONL. Nunca bloquea la corrida: si el archivo no se puede
 # escribir, loguea a stderr y sigue (ADR 002 §2 — la observabilidad no frena
@@ -169,25 +191,30 @@ RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-${REPO_NOMBRE}-${TRABAJO}-${ROL}-${SUFIJO}"
 # flock no existe (macOS del operador), append directo con aviso.
 emitir_evento() {
   local evento="$1" resultado="$2" duracion="$3" detalle="$4"
-  # detalle: sin newlines, escapado JSON minimo, max 1 KiB (ADR 002 §2/H4).
-  detalle="${detalle//\\/\\\\}"
-  detalle="${detalle//\"/\\\"}"
-  detalle="${detalle//$'\n'/ | }"
-  detalle="${detalle//$'\t'/ }"
+  # detalle: escapado + max 1 KiB (ADR 002 §2/H4). El resto de los strings
+  # tambien pasa por json_str (review PR#45 H1).
+  detalle="$(json_str "$detalle")"
   detalle="${detalle:0:1024}"
   local linea
   linea="$(printf '{"ts":"%s","run_id":"%s","repo":"%s","trabajo":"%s","rol":"%s","evento":"%s","resultado":%s,"duracion_s":%s,"costo_usd":null,"detalle":"%s"}' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$REPO_NOMBRE" "$TRABAJO" "$ROL" \
-    "$evento" "$resultado" "$duracion" "$detalle")"
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(json_str "$RUN_ID")" "$(json_str "$REPO_NOMBRE")" \
+    "$(json_str "$TRABAJO")" "$(json_str "$ROL")" "$(json_str "$evento")" \
+    "$resultado" "$duracion" "$detalle")"
   linea="${linea:0:4096}"
-  {
-    mkdir -p "$EVENTOS_DIR"
-    if command -v flock >/dev/null 2>&1; then
-      ( flock 9; printf '%s\n' "$linea" >&9 ) 9>>"$EVENTOS_FILE"
-    else
-      printf '%s\n' "$linea" >> "$EVENTOS_FILE"
-    fi
-  } 2>/dev/null || echo "lanzar-rol: no pude emitir evento a $EVENTOS_FILE (no bloquea)" >&2
+  # Concurrencia (ADR 002 §2 + review PR#45 H4): en Linux (ambiente del
+  # vigilante, con roles en paralelo) flock es OBLIGATORIO — si falta, se
+  # omite la emision con aviso (nunca JSONL intercalado corrupto, y la
+  # corrida no se bloquea). El append directo queda solo para la maquina
+  # del operador (macOS), donde no hay paralelismo real.
+  if command -v flock >/dev/null 2>&1; then
+    ( flock 9; printf '%s\n' "$linea" >&9 ) 9>>"$EVENTOS_FILE" 2>/dev/null \
+      || echo "lanzar-rol: no pude emitir evento a $EVENTOS_FILE (no bloquea)" >&2
+  elif [[ "$(uname)" == "Linux" ]]; then
+    echo "lanzar-rol: flock no disponible en Linux — evento OMITIDO (instalar util-linux)." >&2
+  else
+    printf '%s\n' "$linea" >> "$EVENTOS_FILE" 2>/dev/null \
+      || echo "lanzar-rol: no pude emitir evento a $EVENTOS_FILE (no bloquea)" >&2
+  fi
 }
 
 # ADR 002 §5: al tomar un trabajo, asignar el issue a la cuenta maquina del
