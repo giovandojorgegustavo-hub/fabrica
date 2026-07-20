@@ -48,16 +48,16 @@ fi
 # Los argumentos restantes se pasan tal cual a claude. El vigilante los usa
 # para restringir la sesion (ej: --allowedTools "Bash(gh:*)").
 
-# Allowlist estricta: solo los roles REVISORES tienen identidad propia con
-# token (ver docs/identidades.md). Los roles implementadores (backend,
-# frontend, ux) trabajan con la identidad del operador y no pasan por aca.
+# Allowlist estricta de los 7 roles de la Fabrica. TODOS pasan por este
+# lanzador — revisores y constructores — porque el lanzador es lo que hace
+# que un rol sea un TRABAJADOR de verdad: prompt de rol, identidad que
+# corresponda, y atribucion de su trabajo en la bitacora.
 # Sin este check, ROL="../../etc/passwd" construye paths fuera del contrato.
 case "$ROL" in
-  qa|seguridad|arquitecto|producto) ;;
+  qa|seguridad|arquitecto|producto|backend|frontend|ux) ;;
   *)
     echo "lanzar-rol: rol invalido: '$ROL'" >&2
-    echo "lanzar-rol: validos (revisores con token): qa, seguridad, arquitecto, producto" >&2
-    echo "lanzar-rol: los roles implementadores (backend, frontend, ux) no usan este lanzador." >&2
+    echo "lanzar-rol: validos: qa, seguridad, arquitecto, producto, backend, frontend, ux" >&2
     exit 2
     ;;
 esac
@@ -71,52 +71,60 @@ fi
 
 TOKEN_FILE="/etc/fabrica/tokens/${ROL}.token"
 
-# Issue #23: mensaje honesto para roles cuya cuenta maquina aun no existe
-# (ver tabla en docs/identidades.md) — el diagnostico "grupo fabrica-tokens"
-# era equivocado para este caso.
-if [[ ! -e "$TOKEN_FILE" ]]; then
-  case "$ROL" in
-    arquitecto|producto)
-      echo "lanzar-rol: el rol '$ROL' aun no tiene cuenta maquina ni token (ver tabla en docs/identidades.md)." >&2
-      echo "lanzar-rol: ese rol firma por convencion, sin lanzador, hasta que la cuenta se cree." >&2
-      exit 4
-      ;;
-  esac
-fi
-
 ROL_TEXT="$(cat "$ROL_FILE")"
 
-# Inyecta el token del rol via env var. No lo escribimos a disco. La sesion
-# claude lo hereda; gh y otras herramientas lo usan como identidad.
-# Lectura UNICA (sin test -r previo: evita TOCTOU) + validacion de contenido.
-# El layout esperado es root:fabrica-tokens 640 con el operador en el grupo
-# fabrica-tokens (ver docs/identidades.md).
-if ! GITHUB_TOKEN="$(cat "$TOKEN_FILE" 2>/dev/null)" || [[ -z "$GITHUB_TOKEN" ]]; then
-  echo "lanzar-rol: no puedo leer $TOKEN_FILE (no existe, esta vacio, o no tengo permisos)" >&2
-  echo "lanzar-rol: el operador debe pertenecer al grupo fabrica-tokens; ver docs/identidades.md." >&2
-  exit 4
+# --- Identidad de GitHub -----------------------------------------------
+# Dos regimenes, segun la tabla de docs/identidades.md:
+#   (a) rol CON cuenta maquina (hay token en /etc/fabrica/tokens/<rol>.token):
+#       se inyecta ese PAT — el rol firma con su propia identidad y sus
+#       aprobaciones cuentan para branch protection.
+#   (b) rol SIN cuenta maquina: corre con la identidad del OPERADOR (la
+#       autenticacion de gh que ya tiene el usuario). Es el caso de los
+#       constructores (backend, frontend, ux) y de arquitecto/producto
+#       mientras sus cuentas no existan: construyen y firman por convencion,
+#       pero NO pueden emitir aprobaciones que el candado cuente. Esa
+#       asimetria es deliberada: el gate lo sostienen los revisores.
+IDENTIDAD="operador"
+if [[ -e "$TOKEN_FILE" ]]; then
+  # Issue #14: el token debe ser un ARCHIVO REGULAR, no symlink ni FIFO ni
+  # device — un symlink fuera del layout (error del operador) o una FIFO
+  # adversarial inyectarian contenido arbitrario como token.
+  if [[ -L "$TOKEN_FILE" || ! -f "$TOKEN_FILE" ]]; then
+    echo "lanzar-rol: $TOKEN_FILE debe ser un archivo regular (no symlink/FIFO/device)." >&2
+    exit 4
+  fi
+  # ADVERTENCIA (issue #14): NUNCA activar set -x alrededor de la lectura del
+  # token — el PAT se imprimiria en stderr. El path del archivo puede loguearse;
+  # el VALOR jamas. Lectura UNICA (sin test -r previo: evita TOCTOU).
+  if ! GITHUB_TOKEN="$(cat "$TOKEN_FILE" 2>/dev/null)" || [[ -z "$GITHUB_TOKEN" ]]; then
+    echo "lanzar-rol: existe $TOKEN_FILE pero no puedo leerlo (permisos?) o esta vacio." >&2
+    echo "lanzar-rol: el operador debe pertenecer al grupo fabrica-tokens; ver docs/identidades.md." >&2
+    exit 4
+  fi
+  # Issue #23: validar forma del PAT aca — un archivo con basura fallaria
+  # recien dentro de la sesion, lejos de la causa.
+  if [[ ! "$GITHUB_TOKEN" =~ ^(ghp_|github_pat_) ]]; then
+    echo "lanzar-rol: el contenido de $TOKEN_FILE no parece un PAT de GitHub (prefijo ghp_ o github_pat_)." >&2
+    exit 4
+  fi
+  export GITHUB_TOKEN
+  IDENTIDAD="cuenta maquina ($TOKEN_FILE)"
 fi
-# Issue #14: el token debe ser un ARCHIVO REGULAR, no symlink ni FIFO ni
-# device — un symlink fuera del layout (error del operador) o una FIFO
-# adversarial inyectarian contenido arbitrario como token.
-if [[ -L "$TOKEN_FILE" || ! -f "$TOKEN_FILE" ]]; then
-  echo "lanzar-rol: $TOKEN_FILE debe ser un archivo regular (no symlink/FIFO/device)." >&2
-  exit 4
+
+# --- Atribucion del trabajo en la bitacora -----------------------------
+# Si existe un token de ingesta propio del rol, se lo pasamos a los hooks:
+# asi el trabajo de cada trabajador aparece en la bitacora como SU empleado
+# y no todos bajo un generico (issue bitacora-v2#7). Si no existe, los hooks
+# usan su default y el chat se ingiere igual — jamas se pierde trazabilidad
+# por falta de configuracion.
+HOOK_TOKEN_ROL="/etc/bitacora-v2/hooks/${ROL}.token"
+if [[ -f "$HOOK_TOKEN_ROL" && ! -L "$HOOK_TOKEN_ROL" ]]; then
+  export BITACORA_V2_HOOK_TOKEN_FILE="$HOOK_TOKEN_ROL"
 fi
-# ADVERTENCIA (issue #14): NUNCA activar set -x alrededor de la lectura del
-# token — el PAT se imprimiria en stderr. El path del archivo puede loguearse;
-# el VALOR jamas.
-# Issue #23: validar forma del PAT aca — un archivo con basura fallaria
-# recien dentro de la sesion, lejos de la causa.
-if [[ ! "$GITHUB_TOKEN" =~ ^(ghp_|github_pat_) ]]; then
-  echo "lanzar-rol: el contenido de $TOKEN_FILE no parece un PAT de GitHub (prefijo ghp_ o github_pat_)." >&2
-  exit 4
-fi
-export GITHUB_TOKEN
 
 FULL_PROMPT="$(printf '%s\n\n---\n\nPedido del usuario:\n\n%s\n' "$ROL_TEXT" "$PROMPT_TEXT")"
 
-echo "lanzar-rol: rol=$ROL token=$TOKEN_FILE" >&2
+echo "lanzar-rol: rol=$ROL identidad=$IDENTIDAD atribucion=${BITACORA_V2_HOOK_TOKEN_FILE:-generica}" >&2
 # El separador -- es OBLIGATORIO: el prompt arranca con el frontmatter del
 # archivo de rol ("---") y sin separador el CLI lo parsea como opcion
 # (error: unknown option '---'). Encontrado en la primera corrida real del
