@@ -24,7 +24,20 @@
 ## Pull Requests
 - Todo merge a main pasa por Pull Request en GitHub.
 - El PR muestra el diff completo: se lee ANTES de aprobar.
+- **Todo PR referencia su issue en el body** (`Closes #N` para el que cierra el trabajo, `Refs #N` para avances parciales — las palabras clave son en INGLES, GitHub no entiende "Cierra"). Es como el vigilante resuelve que issue etiquetar (ADR 002 §3); un PR sin issue referenciado es violacion de proceso que qa señala en su revision.
 - **PRs encadenados**: antes de mergear el PR padre con borrado de rama, reapuntar los hijos a main (gh pr edit <hijo> --base main). GitHub CIERRA (no retargetea) un PR cuya rama base se borra, y un PR cerrado con base borrada no puede reabrirse — hay que crear uno nuevo y re-revisar (leccion del issue #28).
+
+## Estados de un trabajo (ADR 002)
+- La fuente de verdad del estado de un trabajo son los labels `estado:*` del ISSUE: `pendiente → en-curso → fallo-1/fallo-2 → bloqueada`; terminada = issue cerrado, sin label. Los escriben el vigilante y el lanzador; el tablero de Projects es SOLO una vista — si tablero y labels difieren, ganan los labels.
+- `bloqueada` requiere operador. Al re-etiquetar `pendiente`, se remueven los `fallo-*` y el contador de reintentos arranca de cero: la intervencion humana resetea el historial.
+- Cada corrida de un rol tiene su `run_id` (lo genera lanzar-rol) y queda en la linea `run:` del comentario firmado. Eventos JSONL, clasificacion de fallos transitorios y politica de reintentos: ADR 002 y `docs/vigilante.md`.
+
+## Ordenes multi-operario (issue padre + sub-issues, ADR 002 §6)
+- Una orden que requiere varios roles es un **issue padre**: contiene los artefactos de las estaciones tempranas (requerimientos destilados, links a mockups). NO contiene la implementacion.
+- El rol `arquitecto` comenta su plan en el padre y lo parte en **sub-issues** (funcion nativa de GitHub; ya habilitada en el repo), uno por rol ejecutor. Cada sub-issue nace con el label `rol:<rol>` y vive su ciclo completo issue → rama → PR con su propio estado y assignee.
+- El `arquitecto` queda como assignee del padre hasta su cierre: es el responsable del conjunto.
+- El padre cierra cuando cierran todos los hijos. Un hijo `bloqueada` NO propaga al padre automaticamente: el padre refleja progreso, no estado agregado — el operador ve el bloqueo en el hijo y decide.
+- Fallback si sub-issues no estuviera disponible en un repo: task-list de issues linkeados en el cuerpo del padre (`- [ ] #N`).
 
 ## Circuito de revision (cableado por evento)
 - **Todo PR de codigo**: recibe revision de `qa` Y `seguridad`, como sesiones separadas del implementador, con comentario firmado en el PR.
