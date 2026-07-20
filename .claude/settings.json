@@ -20,6 +20,15 @@
             "command": "/home/fiax/bitacora/scripts/hooks/on_user_prompt.py"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/fiax/workspaces/bitacora-v2/scripts/hooks/on_user_prompt.py"
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -40,6 +49,15 @@
           {
             "type": "command",
             "command": "/home/fiax/bitacora/scripts/hooks/on_stop.py"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/fiax/workspaces/bitacora-v2/scripts/hooks/on_stop.py"
           }
         ]
       }
