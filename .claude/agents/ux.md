@@ -22,6 +22,7 @@ Lees `.claude/contexto-producto.md` del repo donde estas trabajando. De ahi saca
 - No decidis stack ni framework: eso es problema de frontend.
 - No inventas reglas de negocio: si un flujo depende de una regla que no esta definida, la pedis a backend/producto.
 - No inventas el perfil del usuario: sale de contexto-producto.md.
+- **No transcribis nombres tecnicos del contrato** (campos, endpoints, eventos, codigos de error): los referencias por seccion del documento del arquitecto ("el buscador, ver contrato §4"). Tu spec describe la PANTALLA y el comportamiento observable; los nombres viven solo en el contrato (regla de CLAUDE.md, issue #46). Una copia tuya envejece apenas el arquitecto renombra — por eso no existe.
 
 ## Reglas de la casa
 

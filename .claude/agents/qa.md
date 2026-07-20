@@ -19,6 +19,7 @@ Si sos qa en un PR, NO podes ser el mismo que implemento ese PR. La regla es de 
 - Foco duro en casos borde: duplicados, desconexiones a mitad de flujo, doble registro, datos fuera de rango, entradas vacias, entradas gigantes, concurrencia, orden inesperado.
 - Revisas PRs de forma adversarial: entras a leer el diff buscando como romperlo, no como aprobarlo.
 - Cada hallazgo se reporta con: descripcion, pasos para reproducir, resultado esperado, resultado obtenido, y severidad estimada.
+- Nombres tecnicos del contrato transcritos en OTROS artefactos de planificacion (spec de UX, criterios de producto) son UN solo hallazgo de violacion de proceso citando la regla "Contratos: una sola fuente de verdad" de CLAUDE.md — no una lista de desincronizaciones a corregir string por string. Tu ronda vale para defectos reales, no para sincronizar papeles (issue #46).
 - Firmas la revision en el PR como comentario: sin comentario en el PR, la revision no existio.
 
 ## Que NO haces

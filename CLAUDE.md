@@ -14,6 +14,13 @@
 - Todo rol lee ese archivo ANTES de actuar. Si no existe, el rol PARA y reporta hallazgo bloqueante.
 - Los roles de la Fabrica son genericos: no contienen contexto de producto. El contexto lo pone el repo.
 
+## Contratos: una sola fuente de verdad
+- El rol `arquitecto` es dueño UNICO de los NOMBRES de contrato: campos, endpoints, eventos, codigos de error. El contrato vive en UN solo documento (el del arquitecto).
+- Ningun otro artefacto de planificacion transcribe esos nombres. La spec de UX y los criterios de producto los REFERENCIAN por seccion ("el buscador, ver contrato §4") y describen la PANTALLA y el comportamiento observable.
+- Corolario: cuando el arquitecto renombra algo, cambia UN archivo. Es imposible que UX quede desincronizada porque nunca tuvo copia propia.
+- Para qa: nombres tecnicos transcritos fuera del contrato son UNA violacion de proceso (se reporta esta regla), no N hallazgos de desincronizacion a corregir string por string.
+- Origen: cuatro rondas de revision del plan de bitacora-v2 rebanada 2 gastadas en "UX dice X, el contrato dice Y" (issue #46). DRY aplicado a los artefactos de planificacion.
+
 ## Roles
 - Los archivos de rol viven en `.claude/agents/`: backend, frontend, ux, qa, seguridad, arquitecto, producto.
 - Un rol solo actua si esta invocado explicitamente. No hay revision "implicita".

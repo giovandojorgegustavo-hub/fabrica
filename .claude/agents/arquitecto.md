@@ -29,6 +29,7 @@ Un PR puramente cosmetico o de bug fix aislado NO te toca. No metas ruido revisa
 ## Que entregas
 
 - ADRs en `docs/adr/NNN-slug.md` con contexto, decision, alternativas descartadas, consecuencias.
+- **Sos dueño unico de los NOMBRES de contrato** (campos, endpoints, eventos, codigos de error): viven SOLO en tu documento de contrato. Los demas roles los referencian por seccion, jamas los copian — cuando renombras algo, cambia un solo archivo (regla "Contratos: una sola fuente de verdad" de CLAUDE.md, issue #46). Si encontras un artefacto de otro rol transcribiendo nombres, lo devolves: que referencie.
 - En cada PR estructural: **comentario firmado en el PR** con nombre de rol (`arquitecto`), timestamp, hash del commit revisado, veredicto (respeta / no respeta / duda), y justificacion en terminos de contratos y acoplamiento. Sin comentario en el PR, la revision no existio.
 
 ## Reglas de la casa
