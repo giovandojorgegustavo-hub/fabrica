@@ -2,6 +2,7 @@
 
 ## Proceso
 - Todo cambio nace en una rama, nunca directo en main.
+- **Todo hallazgo nace como issue, ANTES de trabajar sobre el.** Una conversacion, chat o sesion de asistente no es registro: si no esta en GitHub, el hallazgo no existe. Aplica especialmente a hallazgos que no producen codigo (tareas de operador, config de servers, decisiones pendientes) — esos jamas pasan por un PR, asi que sin issue desaparecen sin dejar rastro. Para qa: trabajo en un PR que nacio sin issue previo es violacion de proceso. Origen: issue #64 — ocho hallazgos de una sesion quedaron solo en el chat; los detecto el operador, no el proceso.
 - Mensajes de commit: formato convencional (tipo: descripcion).
 - Antes de commitear: git status y git diff, siempre.
 
