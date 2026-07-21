@@ -176,7 +176,13 @@ copiar_archivo() {
   # Issue #27: mktemp crea el temporal con modo 0600 y mv hereda ESE modo, no
   # el del archivo fuente — los scripts llegaban sin bit de ejecucion y el
   # vigilante (correctamente) se negaba a usar un lanzador no ejecutable.
-  if ! chmod --reference="$src" "$tmp"; then
+  # Portabilidad: `chmod --reference` es de GNU coreutils y NO existe en BSD
+  # (macOS) — el operador que corre el sync desde una Mac lo veia fallar en los
+  # 14 archivos. Derivamos el modo octal del fuente con `stat` (BSD usa
+  # `-f %Lp`, GNU usa `-c %a`) y lo aplicamos con un chmod portable.
+  local src_mode
+  src_mode="$(stat -f '%Lp' "$src" 2>/dev/null || stat -c '%a' "$src" 2>/dev/null)"
+  if [[ -z "$src_mode" ]] || ! chmod "$src_mode" "$tmp"; then
     rm -f "$tmp"
     echo "sincronizar: chmod fallo para $rel; temporal descartado, destino intacto" >&2
     return 1
